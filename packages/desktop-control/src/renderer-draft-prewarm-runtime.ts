@@ -38,6 +38,7 @@ export interface RendererHostRequestManager {
 }
 
 export interface RendererPrewarmedThreadManager {
+  readonly prewarmedThreadByCwd?: ReadonlyMap<unknown, unknown>;
   discardAllPrewarmedThreads(): void;
 }
 
@@ -71,8 +72,13 @@ export function installDraftPrewarmPolicyBridge(
   const originalPrewarm = bridge.prewarmThreadStart;
   const originalOnNotification = manager.onNotification;
   const originalDispatchAppServerResponse = manager.dispatchAppServerResponse;
+  const cachedPrewarmByCwd = prewarmedThreadManager.prewarmedThreadByCwd;
+  const cachedCwd =
+    cachedPrewarmByCwd instanceof Map && cachedPrewarmByCwd.size === 1
+      ? cachedPrewarmByCwd.keys().next().value
+      : null;
   let selectedModel: string | null = null;
-  let currentCwd: string | null = null;
+  let currentCwd = typeof cachedCwd === "string" && cachedCwd.trim().length > 0 ? cachedCwd : null;
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
   const isRemoteControlHost = hostId.startsWith("remote-control:");
@@ -500,10 +506,10 @@ export function installDraftPrewarmPolicyBridge(
       (method.startsWith("thread/") || method.startsWith("turn/") || method.startsWith("review/"))
     );
   };
-  const routeThreadStart = (parameters: unknown, captureEphemeralCwd = false): unknown => {
+  const routeThreadStart = (parameters: unknown): unknown => {
     if (
       isRecord(parameters) &&
-      (captureEphemeralCwd || parameters.ephemeral !== true) &&
+      parameters.ephemeral !== true &&
       typeof parameters.cwd === "string" &&
       parameters.cwd.trim().length > 0
     ) {
@@ -538,7 +544,7 @@ export function installDraftPrewarmPolicyBridge(
     return shouldUseBridge(method, routedParameters) ? sendBridged() : sendDirect();
   };
   const routedPrewarm = (parameters: unknown, options?: unknown): unknown => {
-    const routedParameters = routeThreadStart(parameters, true);
+    const routedParameters = routeThreadStart(parameters);
     if (shouldUseBridge("thread/start", routedParameters)) {
       return routedSend("thread/start", routedParameters, options);
     }

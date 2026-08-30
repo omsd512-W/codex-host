@@ -23,7 +23,7 @@
 - [x] 4.2 增加仅 DeepSeek 新任务可见的本地化可访问 Dialog
 - [x] 4.3 复用 Host-qualified sidebar导航并阻止陈旧请求打开错误 Thread
 - [x] 4.4 覆盖 loading/empty/error/retry/list/selection/disabled、键盘、焦点、成功导航和 stale generation
-- [x] 4.5 允许官方 ephemeral draft prewarm 提供 cwd，仍拒绝任意直接 ephemeral `thread/start`
+- [x] 4.5 从官方 draft prewarm 缓存恢复唯一 cwd，空、非法或多 cwd 时失败关闭
 
 ## 5. 文档与验证
 

@@ -15,11 +15,12 @@ Renderer SHALL show a localized “打开已有会话” entry only for an unloc
 - **THEN** Renderer SHALL remove or hide the entry and invalidate its pending requests
 - **AND** no other Harness behavior SHALL change
 
-#### Scenario: Official draft prewarm supplies cwd
+#### Scenario: Policy installs after official draft prewarm
 
-- **WHEN** the owned request client's `prewarmThreadStart` supplies a nonblank cwd for the current draft, including an ephemeral prewarm
-- **THEN** the fixed policy SHALL expose that cwd and notify Renderer to recompute the entry's disabled state
-- **AND** an arbitrary direct ephemeral `thread/start` SHALL NOT set or replace the captured cwd
+- **WHEN** the official prewarmed Thread manager already contains exactly one nonblank cwd when the fixed policy is installed
+- **THEN** the policy SHALL expose that cached cwd before waiting for another `thread/start`
+- **AND** zero, malformed, or multiple cached cwd keys SHALL keep the entry disabled
+- **AND** a later ephemeral `thread/start` SHALL NOT set or replace the captured cwd
 
 ### Requirement: Existing Session Dialog is complete and accessible
 

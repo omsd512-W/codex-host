@@ -35,7 +35,7 @@
 
 ### 2. cwd 来自固定 draft policy，但 Host 仍失败关闭复查
 
-Desktop Control 已独占受支持 Renderer 的官方 Request bridge。它从非 ephemeral 的直接 `thread/start` 或官方 `prewarmThreadStart` 参数只读捕获当前 cwd；后者在标记为 ephemeral 时仍代表当前 draft 的受控预热目录。任意直接 ephemeral `thread/start` 不得更新 cwd。冻结 policy 只暴露 `currentCwd()`；Renderer 不扫描 DOM/Fiber、不使用 Node API，也不允许用户编辑该值。
+Desktop Control 已独占受支持 Renderer 的官方 Request bridge。policy 注入时，它可从官方 `prewarmedThreadManager` 的唯一非空 cwd 缓存键恢复已经发生的 draft prewarm；缓存为空、非法或包含多个 cwd 时保持未就绪。之后继续从非 ephemeral 的直接 `thread/start` 或官方 `prewarmThreadStart` 参数只读更新 cwd；任意 ephemeral `thread/start` 不得设置或替换它。冻结 policy 只暴露 `currentCwd()`；Renderer 不扫描 DOM/Fiber、不使用 Node API，也不允许用户编辑该值。
 
 该 cwd 穿过 Renderer 后仍视为不可信。Host 要求绝对路径，并让 Adapter 对当前 profile 的新鲜 `sessions.list` 结果做平台原生精确比较。关联 Request 不接受 title、updatedAt、running、blank、Model、Thinking 或 Permission metadata。手写 Session ID只有在最终重列中仍属于相同 cwd 候选时才能继续。
 

@@ -486,27 +486,63 @@ describe("Renderer draft prewarm policy", () => {
     });
   });
 
-  it("captures trusted prewarm or non-ephemeral direct draft cwd", async () => {
+  it.each([
+    ["missing", undefined, null],
+    ["empty", new Map(), null],
+    ["blank", new Map([["  ", {}]]), null],
+    ["invalid", new Map([[42, {}]]), null],
+    [
+      "ambiguous",
+      new Map([
+        ["/tmp/one", {}],
+        ["/tmp/two", {}],
+      ]),
+      null,
+    ],
+    ["unique", new Map([["/tmp/only", {}]]), "/tmp/only"],
+  ])("fails closed for %s cached prewarm cwd", (_name, prewarmedThreadByCwd, expected) => {
+    const target: DraftPrewarmPolicyTarget = {};
+    installDraftPrewarmPolicyBridge(
+      requestManagerFixture(),
+      requestBridgeFixture(),
+      "local",
+      target,
+      {
+        discardAllPrewarmedThreads: vi.fn(),
+        ...(prewarmedThreadByCwd ? { prewarmedThreadByCwd } : {}),
+      },
+    );
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      currentCwd(): string | null;
+    };
+    expect(policy.currentCwd()).toBe(expected);
+  });
+
+  it("captures a cached official draft cwd and later non-ephemeral starts", async () => {
     const manager = requestManagerFixture();
     const bridge = requestBridgeFixture();
     const dispatchEvent = vi.fn(() => true);
     const target: DraftPrewarmPolicyTarget = { dispatchEvent };
-    const prewarmedThreadManager = { discardAllPrewarmedThreads: vi.fn() };
+    const prewarmedThreadManager = {
+      discardAllPrewarmedThreads: vi.fn(),
+      prewarmedThreadByCwd: new Map([["/tmp/cached", {}]]),
+    };
     installDraftPrewarmPolicyBridge(manager, bridge, "local", target, prewarmedThreadManager);
     const first = target.__codexhostDraftPrewarmPolicyV1 as {
       currentCwd(): string | null;
     };
 
-    expect(first.currentCwd()).toBeNull();
+    expect(first.currentCwd()).toBe("/tmp/cached");
     await bridge.sendRequest("thread/start", { cwd: "  ", model: "gpt-5" });
     await bridge.sendRequest("thread/start", { cwd: "/tmp/direct-ignored", ephemeral: true });
-    await bridge.prewarmThreadStart({ cwd: "  ", ephemeral: true });
-    expect(first.currentCwd()).toBeNull();
+    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarm-ignored", ephemeral: true });
+    expect(first.currentCwd()).toBe("/tmp/cached");
     expect(dispatchEvent).toHaveBeenCalledOnce();
-    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", ephemeral: true });
+    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", model: "gpt-5" });
     expect(first.currentCwd()).toBe("/tmp/prewarmed");
     expect(dispatchEvent).toHaveBeenCalledTimes(2);
-    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", ephemeral: true });
+    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", model: "gpt-5" });
     expect(dispatchEvent).toHaveBeenCalledTimes(2);
     await bridge.sendRequest("thread/start", { cwd: "/tmp/project", model: "gpt-5" });
     expect(first.currentCwd()).toBe("/tmp/project");
@@ -519,13 +555,16 @@ describe("Renderer draft prewarm policy", () => {
       requestBridgeFixture(),
       "local",
       target,
-      { discardAllPrewarmedThreads: vi.fn() },
+      {
+        discardAllPrewarmedThreads: vi.fn(),
+        prewarmedThreadByCwd: new Map([["/tmp/replacement", {}]]),
+      },
     );
     const replacement = target.__codexhostDraftPrewarmPolicyV1 as {
       currentCwd(): string | null;
     };
     expect(replacement).not.toBe(first);
-    expect(replacement.currentCwd()).toBeNull();
+    expect(replacement.currentCwd()).toBe("/tmp/replacement");
   });
 
   it("tunnels private Host requests through the stock Remote Control app-server", async () => {
