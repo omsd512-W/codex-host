@@ -500,10 +500,10 @@ export function installDraftPrewarmPolicyBridge(
       (method.startsWith("thread/") || method.startsWith("turn/") || method.startsWith("review/"))
     );
   };
-  const routeThreadStart = (parameters: unknown): unknown => {
+  const routeThreadStart = (parameters: unknown, captureEphemeralCwd = false): unknown => {
     if (
       isRecord(parameters) &&
-      parameters.ephemeral !== true &&
+      (captureEphemeralCwd || parameters.ephemeral !== true) &&
       typeof parameters.cwd === "string" &&
       parameters.cwd.trim().length > 0
     ) {
@@ -538,7 +538,7 @@ export function installDraftPrewarmPolicyBridge(
     return shouldUseBridge(method, routedParameters) ? sendBridged() : sendDirect();
   };
   const routedPrewarm = (parameters: unknown, options?: unknown): unknown => {
-    const routedParameters = routeThreadStart(parameters);
+    const routedParameters = routeThreadStart(parameters, true);
     if (shouldUseBridge("thread/start", routedParameters)) {
       return routedSend("thread/start", routedParameters, options);
     }

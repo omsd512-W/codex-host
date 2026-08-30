@@ -15,6 +15,12 @@ Renderer SHALL show a localized “打开已有会话” entry only for an unloc
 - **THEN** Renderer SHALL remove or hide the entry and invalidate its pending requests
 - **AND** no other Harness behavior SHALL change
 
+#### Scenario: Official draft prewarm supplies cwd
+
+- **WHEN** the owned request client's `prewarmThreadStart` supplies a nonblank cwd for the current draft, including an ephemeral prewarm
+- **THEN** the fixed policy SHALL expose that cwd and notify Renderer to recompute the entry's disabled state
+- **AND** an arbitrary direct ephemeral `thread/start` SHALL NOT set or replace the captured cwd
+
 ### Requirement: Existing Session Dialog is complete and accessible
 
 Renderer SHALL use one lightweight Dialog or Popover with loading, empty, error, retry, list, selection, disabled, linking, and opening states. It SHALL support keyboard selection, Escape cancellation when safe, Tab navigation, focus restoration, status/alert semantics, and a disabled confirm action until one eligible candidate is selected. All user-visible copy SHALL come from the existing localization mechanism.

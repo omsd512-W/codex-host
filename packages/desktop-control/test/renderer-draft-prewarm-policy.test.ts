@@ -486,7 +486,7 @@ describe("Renderer draft prewarm policy", () => {
     });
   });
 
-  it("captures only a non-ephemeral nonblank draft cwd on the current policy", async () => {
+  it("captures trusted prewarm or non-ephemeral direct draft cwd", async () => {
     const manager = requestManagerFixture();
     const bridge = requestBridgeFixture();
     const dispatchEvent = vi.fn(() => true);
@@ -499,14 +499,20 @@ describe("Renderer draft prewarm policy", () => {
 
     expect(first.currentCwd()).toBeNull();
     await bridge.sendRequest("thread/start", { cwd: "  ", model: "gpt-5" });
-    await bridge.prewarmThreadStart({ cwd: "/tmp/ignored", ephemeral: true });
+    await bridge.sendRequest("thread/start", { cwd: "/tmp/direct-ignored", ephemeral: true });
+    await bridge.prewarmThreadStart({ cwd: "  ", ephemeral: true });
     expect(first.currentCwd()).toBeNull();
     expect(dispatchEvent).toHaveBeenCalledOnce();
-    await bridge.prewarmThreadStart({ cwd: "/tmp/project", model: "gpt-5" });
+    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", ephemeral: true });
+    expect(first.currentCwd()).toBe("/tmp/prewarmed");
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    await bridge.prewarmThreadStart({ cwd: "/tmp/prewarmed", ephemeral: true });
+    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    await bridge.sendRequest("thread/start", { cwd: "/tmp/project", model: "gpt-5" });
     expect(first.currentCwd()).toBe("/tmp/project");
-    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    expect(dispatchEvent).toHaveBeenCalledTimes(3);
     await bridge.prewarmThreadStart({ cwd: "/tmp/project", model: "gpt-5" });
-    expect(dispatchEvent).toHaveBeenCalledTimes(2);
+    expect(dispatchEvent).toHaveBeenCalledTimes(3);
 
     installDraftPrewarmPolicyBridge(
       requestManagerFixture(),
