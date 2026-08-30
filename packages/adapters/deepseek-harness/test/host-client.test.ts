@@ -49,6 +49,63 @@ function childProcess(): ChildProcess {
 }
 
 describe("DeepSeek local Host connection", () => {
+  it("parses valid session.list metadata and rejects an invalid row schema", async () => {
+    let malformed = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: URL, init?: RequestInit) => {
+        const request = JSON.parse(String(init?.body)) as { rpcId: string };
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              type: "server-response",
+              rpcId: request.rpcId,
+              result: {
+                ok: true,
+                value: {
+                  items: [
+                    {
+                      sessionId: "session-existing-1",
+                      updatedAt: malformed ? "not-a-number" : 1_725_000_000_000,
+                      running: false,
+                      blank: true,
+                      cwd: "/workspace",
+                      projections: { asOfSeq: -1, values: { title: null } },
+                    },
+                  ],
+                },
+              },
+            }),
+          ),
+        );
+      }),
+    );
+    try {
+      const client = new NodeDeepSeekHostClient("http://127.0.0.1:43123");
+      await expect(client.sessions.list({})).resolves.toMatchObject({
+        result: {
+          ok: true,
+          value: {
+            items: [
+              {
+                sessionId: "session-existing-1",
+                updatedAt: 1_725_000_000_000,
+                running: false,
+                blank: true,
+                cwd: "/workspace",
+              },
+            ],
+          },
+        },
+      });
+
+      malformed = true;
+      await expect(client.sessions.list({})).rejects.toMatchObject({ name: "ZodError" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("calls the Typert Remote command wire and validates its catalog", async () => {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     vi.stubGlobal(

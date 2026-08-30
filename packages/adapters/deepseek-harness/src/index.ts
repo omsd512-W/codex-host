@@ -1,7 +1,7 @@
 import { packageMetadata as harnessAdapter } from "@codexhost/harness-adapter";
 import { WORKSPACE_CONTRACT_VERSION } from "@codexhost/shared-contracts";
 
-export { DeepSeekHarnessAdapter } from "./deepseek-harness-adapter.js";
+export { DeepSeekHarnessAdapter, deepSeekSessionCwdsEqual } from "./deepseek-harness-adapter.js";
 export type {
   DeepSeekHarnessAdapterDependencies,
   DeepSeekHarnessAdapterOptions,

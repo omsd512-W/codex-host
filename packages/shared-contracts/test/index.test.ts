@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   codexhostErrorSchema,
+  deepSeekNativeSessionCandidatesResultSchema,
+  deepSeekNativeSessionLinkParamsSchema,
   harnessIdSchema,
   harnessInspectionSchema,
   harnessModelRefSchema,
@@ -76,5 +78,25 @@ describe("shared-contracts public package", () => {
         retryable: false,
       }),
     ).toEqual({ code: "SYNTHETIC", message: "Synthetic error.", retryable: false });
+    expect(
+      deepSeekNativeSessionCandidatesResultSchema.parse({
+        candidates: [
+          {
+            nativeSessionId: "native-session",
+            title: null,
+            updatedAt: 0,
+            cwd: "/workspace",
+            running: false,
+            blank: true,
+          },
+        ],
+      }),
+    ).toMatchObject({ candidates: [{ nativeSessionId: "native-session" }] });
+    expect(
+      deepSeekNativeSessionLinkParamsSchema.parse({
+        cwd: "/workspace",
+        nativeSessionId: "native-session",
+      }),
+    ).toEqual({ cwd: "/workspace", nativeSessionId: "native-session" });
   });
 });

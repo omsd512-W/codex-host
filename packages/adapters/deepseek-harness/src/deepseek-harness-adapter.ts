@@ -9,6 +9,7 @@ import type {
   RpcId,
   RpcResponse,
   SessionProjectionsBlock,
+  SessionSummary,
 } from "@deepseek-ai/dsh-host-apiproxy/api";
 import type { SessionId } from "@deepseek-ai/dsh-session/types";
 
@@ -57,6 +58,7 @@ import {
   type TurnStartCommand,
 } from "@codexhost/harness-adapter";
 import {
+  deepSeekNativeSessionCandidateSchema,
   harnessCommandCatalogSchema,
   harnessIdSchema,
   harnessPermissionModeIdSchema,
@@ -67,6 +69,7 @@ import {
   nativeSessionRefSchema,
   nativeTurnRefSchema,
   type HarnessId,
+  type DeepSeekNativeSessionCandidate,
   type HarnessPermissionModeCatalog,
   type HarnessPermissionModeId,
   type HarnessThinkingOption,
@@ -199,8 +202,70 @@ const HISTORY_PAGE_MESSAGES = 100;
 const HISTORY_PAGE_LIMIT = 10_000;
 const DELEGATION_PERMISSION_PRESET = "danger-full-access";
 
+type DeepSeekPathFlavor = "posix" | "win32";
+
+export function deepSeekSessionCwdsEqual(
+  left: string,
+  right: string,
+  flavor: DeepSeekPathFlavor = process.platform === "win32" ? "win32" : "posix",
+): boolean {
+  if (!left.trim() || !right.trim() || left.includes("\0") || right.includes("\0")) return false;
+  const paths = flavor === "win32" ? path.win32 : path.posix;
+  if (!paths.isAbsolute(left) || !paths.isAbsolute(right)) return false;
+  return paths.relative(paths.resolve(left), paths.resolve(right)) === "";
+}
+
+function projectDeepSeekNativeSessionCandidate(
+  summary: SessionSummary,
+  cwd: string,
+): DeepSeekNativeSessionCandidate | null {
+  if (summary.origin === "subagent" || !summary.cwd) return null;
+  if (!deepSeekSessionCwdsEqual(summary.cwd, cwd)) return null;
+  const projectionValues: unknown = summary.projections?.values;
+  const title = isRecord(projectionValues) ? projectionValues.title : undefined;
+  const candidate = {
+    nativeSessionId: summary.sessionId,
+    title: typeof title === "string" ? title : null,
+    updatedAt: summary.updatedAt,
+    cwd: summary.cwd,
+    running: summary.running,
+    blank: summary.blank,
+  };
+  const parsed = deepSeekNativeSessionCandidateSchema.safeParse(candidate);
+  if (parsed.success) return parsed.data;
+  if (candidate.title !== null) {
+    const withoutMalformedTitle = deepSeekNativeSessionCandidateSchema.safeParse({
+      ...candidate,
+      title: null,
+    });
+    if (withoutMalformedTitle.success) return withoutMalformedTitle.data;
+  }
+  return null;
+}
+
+async function readDeepSeekSessionList(client: DeepSeekHostClient): Promise<SessionSummary[]> {
+  try {
+    return unwrapRpc(await client.sessions.list({}), "session.list").items;
+  } catch (error) {
+    if (
+      error instanceof SyntaxError ||
+      (error instanceof Error &&
+        (error.name === "ZodError" || error.message.startsWith("rpcId mismatch")))
+    ) {
+      throw new DeepSeekHarnessTransportError(
+        "protocolError",
+        `DeepSeek Harness 'session.list' returned an invalid response: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+}
+
 function normalizedError(error: unknown, fallback: HarnessError["code"]): HarnessError {
   if (error instanceof DeepSeekHarnessTransportError) {
+    if (error.nativeCode === "agent-busy") {
+      return { code: "sessionBusy", message: error.message, retryable: true };
+    }
     return {
       code: error.code,
       message: error.message,
@@ -223,11 +288,16 @@ function unsupported(message: string): HarnessError {
 }
 
 function commandFailure(operation: string, error: { code: string; message: string }): HarnessError {
-  const code = error.code === "session-not-found" ? "unavailable" : "nativeFailure";
+  const code =
+    error.code === "session-not-found"
+      ? "unavailable"
+      : error.code === "agent-busy"
+        ? "sessionBusy"
+        : "nativeFailure";
   return {
     code,
     message: `DeepSeek Harness '${operation}' failed: ${error.message}`,
-    retryable: code === "unavailable" || error.code === "internal",
+    retryable: code === "unavailable" || code === "sessionBusy" || error.code === "internal",
   };
 }
 
@@ -287,6 +357,7 @@ async function requireDeepSeekPermissionCommand(
     throw new DeepSeekHarnessTransportError(
       response.error.code === "session-not-found" ? "unavailable" : "nativeFailure",
       `DeepSeek Harness 'commands/list' failed: ${response.error.message}`,
+      response.error.code,
     );
   }
   if (!response.value.some(({ name, input }) => name === "permission" && input !== undefined)) {
@@ -307,6 +378,7 @@ async function executeDeepSeekPermissionMode(
     throw new DeepSeekHarnessTransportError(
       response.error.code === "session-not-found" ? "unavailable" : "nativeFailure",
       `DeepSeek Harness 'commands/execute' failed: ${response.error.message}`,
+      response.error.code,
     );
   }
   if (!response.value || response.value.result.kind !== "success") {
@@ -1803,6 +1875,36 @@ export class DeepSeekHarnessAdapter implements HarnessAdapter {
     }
   }
 
+  async listNativeSessionCandidates(
+    cwd: string,
+  ): Promise<HarnessResult<DeepSeekNativeSessionCandidate[]>> {
+    if (this.#closePromise) {
+      return { ok: false, error: invalidState("DeepSeek Harness Adapter is closing") };
+    }
+    if (!deepSeekSessionCwdsEqual(cwd, cwd)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalidRequest",
+          message: "DeepSeek Harness candidate discovery requires an absolute cwd",
+          retryable: false,
+        },
+      };
+    }
+    try {
+      await this.#connection.connect();
+      const candidates = (await readDeepSeekSessionList(this.#connection.client)).flatMap(
+        (summary) => {
+          const candidate = projectDeepSeekNativeSessionCandidate(summary, cwd);
+          return candidate ? [candidate] : [];
+        },
+      );
+      return { ok: true, value: candidates };
+    } catch (error) {
+      return { ok: false, error: normalizedError(error, "unavailable") };
+    }
+  }
+
   async open(input: OpenSessionInput): Promise<HarnessResult<HarnessSession>> {
     if (this.#closePromise) {
       return { ok: false, error: invalidState("DeepSeek Harness Adapter is closing") };
@@ -1813,6 +1915,16 @@ export class DeepSeekHarnessAdapter implements HarnessAdapter {
         error: {
           code: "invalidRequest",
           message: "DeepSeek Harness requires cwd",
+          retryable: false,
+        },
+      };
+    }
+    if (input.kind === "resume" && !deepSeekSessionCwdsEqual(input.cwd, input.cwd)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalidRequest",
+          message: "DeepSeek Harness resume requires an absolute cwd",
           retryable: false,
         },
       };
@@ -1873,6 +1985,70 @@ export class DeepSeekHarnessAdapter implements HarnessAdapter {
           };
         }
         sessionId = parsed.data.nativeSessionId;
+        const matches = (await readDeepSeekSessionList(this.#connection.client)).filter(
+          (summary) => summary.sessionId === sessionId,
+        );
+        if (matches.length === 0) {
+          return {
+            ok: false,
+            error: {
+              code: "sessionNotFound",
+              message: "DeepSeek Harness Native Session is unavailable",
+              retryable: false,
+            },
+          };
+        }
+        if (matches.length !== 1) {
+          return {
+            ok: false,
+            error: {
+              code: "protocolError",
+              message: "DeepSeek Harness returned duplicate Native Session identities",
+              retryable: false,
+            },
+          };
+        }
+        const summary = matches[0] as SessionSummary;
+        if (summary.origin === "subagent") {
+          return {
+            ok: false,
+            error: {
+              code: "invalidRequest",
+              message: "DeepSeek Harness cannot resume a Subagent as a Thread",
+              retryable: false,
+            },
+          };
+        }
+        if (!summary.cwd || !deepSeekSessionCwdsEqual(summary.cwd, summary.cwd)) {
+          return {
+            ok: false,
+            error: {
+              code: "protocolError",
+              message: "DeepSeek Harness Native Session has invalid working directory metadata",
+              retryable: false,
+            },
+          };
+        }
+        if (!deepSeekSessionCwdsEqual(summary.cwd, cwd)) {
+          return {
+            ok: false,
+            error: {
+              code: "invalidRequest",
+              message: "DeepSeek Harness Native Session belongs to another working directory",
+              retryable: false,
+            },
+          };
+        }
+        if (summary.running) {
+          return {
+            ok: false,
+            error: {
+              code: "sessionBusy",
+              message: "DeepSeek Harness Native Session is currently running",
+              retryable: true,
+            },
+          };
+        }
       } else {
         const sourceRef = nativeSessionRefSchema.safeParse(input.sourceRef);
         const checkpoint = nativeCheckpointRefSchema.safeParse(input.checkpoint);

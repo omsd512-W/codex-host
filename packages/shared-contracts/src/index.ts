@@ -5,6 +5,24 @@ export { codexhostErrorSchema } from "./errors.js";
 export { REASONING_TRANSCRIPT_COMMAND } from "./reasoning-transcript.js";
 export type { CodexhostError } from "./errors.js";
 export {
+  DEEP_SEEK_NATIVE_SESSION_CANDIDATES_MAX_LENGTH,
+  DEEP_SEEK_NATIVE_SESSION_CWD_MAX_LENGTH,
+  DEEP_SEEK_NATIVE_SESSION_ID_MAX_LENGTH,
+  DEEP_SEEK_NATIVE_SESSION_TITLE_MAX_LENGTH,
+  deepSeekNativeSessionCandidateSchema,
+  deepSeekNativeSessionCandidatesParamsSchema,
+  deepSeekNativeSessionCandidatesResultSchema,
+  deepSeekNativeSessionLinkParamsSchema,
+  deepSeekNativeSessionLinkResultSchema,
+} from "./deepseek-native-sessions.js";
+export type {
+  DeepSeekNativeSessionCandidate,
+  DeepSeekNativeSessionCandidatesParams,
+  DeepSeekNativeSessionCandidatesResult,
+  DeepSeekNativeSessionLinkParams,
+  DeepSeekNativeSessionLinkResult,
+} from "./deepseek-native-sessions.js";
+export {
   externalThreadForkParamsSchema,
   externalThreadForkResultSchema,
 } from "./external-thread-fork.js";

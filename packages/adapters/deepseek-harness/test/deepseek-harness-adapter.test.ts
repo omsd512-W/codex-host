@@ -23,6 +23,7 @@ import {
 
 import {
   DeepSeekHarnessAdapter,
+  deepSeekSessionCwdsEqual,
   type DeepSeekHarnessAdapterDependencies,
   type DeepSeekHostConnectionLike,
 } from "../src/deepseek-harness-adapter.js";
@@ -32,6 +33,7 @@ import type {
   DeepSeekHostSubscriber,
   DeepSeekMuxEnvelope,
 } from "../src/host-client.js";
+import { DeepSeekHarnessTransportError } from "../src/host-client.js";
 import { encodeDeepSeekHarnessModelRef } from "../src/model-catalog.js";
 import { projectToolResult } from "../src/projection.js";
 
@@ -168,6 +170,7 @@ class FakeConnection implements DeepSeekHostConnectionLike {
   };
   connected = false;
   closed = false;
+  connectError: unknown;
   currentModel: ModelSelection = CURRENT_MODEL;
   forkChildId = "session-forked-1" as SessionId;
   forkFailure: "fork-unavailable" | "workspace-attach-failed" | undefined;
@@ -176,6 +179,7 @@ class FakeConnection implements DeepSeekHostConnectionLike {
   readonly client: DeepSeekHostClient;
 
   constructor() {
+    this.cwd.set(SESSION_ID, path.resolve("/workspace"));
     const sessions = {
       list: this.calls.list,
       create: this.calls.create,
@@ -457,6 +461,7 @@ class FakeConnection implements DeepSeekHostConnectionLike {
   }
 
   connect(): Promise<void> {
+    if (this.connectError) return Promise.reject(this.connectError);
     this.connected = true;
     return Promise.resolve();
   }
@@ -526,7 +531,406 @@ async function openCreated(adapter: DeepSeekHarnessAdapter) {
   return opened.value;
 }
 
+describe("DeepSeek Native Session cwd matching", () => {
+  it.each([
+    ["Windows drive and directory case", "C:\\Work\\Repo", "c:\\work\\repo", "win32", true],
+    ["Windows separators and dot segments", "C:\\Work\\Repo", "c:/work/x/../repo/", "win32", true],
+    ["Windows sibling", "C:\\Work\\Repo", "C:\\Work\\Repo-2", "win32", false],
+    ["Windows prefix child", "C:\\Work\\Repo", "C:\\Work\\Repo\\child", "win32", false],
+    ["Windows drive-relative", "C:\\Work\\Repo", "C:Work\\Repo", "win32", false],
+    ["POSIX exact with dot segments", "/work/repo", "/work/x/../repo/", "posix", true],
+    ["POSIX case", "/work/repo", "/work/Repo", "posix", false],
+    ["POSIX sibling", "/work/repo", "/work/repository", "posix", false],
+    ["POSIX prefix child", "/work/repo", "/work/repo/child", "posix", false],
+    ["relative cwd", "/work/repo", "work/repo", "posix", false],
+    ["invalid cwd", "/work/repo", "/work/repo\0ignored", "posix", false],
+  ] as const)("compares %s", (_name, left, right, flavor, expected) => {
+    expect(deepSeekSessionCwdsEqual(left, right, flavor)).toBe(expected);
+  });
+});
+
 describe("DeepSeekHarnessAdapter local Host", () => {
+  it("lists only real, ordinary Native Sessions for the exact cwd", async () => {
+    const { adapter, connection } = fixture();
+    const cwd = path.resolve("/workspace");
+    connection.calls.list.mockResolvedValueOnce(
+      success({
+        items: [
+          {
+            sessionId: "session-titled",
+            updatedAt: 30,
+            running: false,
+            blank: false,
+            cwd,
+            projections: { asOfSeq: 3, values: { title: "Native title" } },
+          },
+          {
+            sessionId: "session-blank",
+            updatedAt: 20,
+            running: false,
+            blank: true,
+            cwd,
+          },
+          {
+            sessionId: "session-running",
+            updatedAt: 10,
+            running: true,
+            blank: false,
+            cwd,
+          },
+          {
+            sessionId: "session-malformed-title",
+            updatedAt: 9,
+            running: false,
+            blank: false,
+            cwd,
+            projections: { asOfSeq: 1, values: { title: { preview: "not a title" } } },
+          },
+          {
+            sessionId: "session-subagent",
+            updatedAt: 8,
+            running: false,
+            blank: false,
+            cwd,
+            origin: "subagent" as const,
+          },
+          {
+            sessionId: "session-fork",
+            updatedAt: 7,
+            running: false,
+            blank: false,
+            cwd,
+            parentSessionId: "session-parent",
+          },
+          {
+            sessionId: "session-child-cwd",
+            updatedAt: 6,
+            running: false,
+            blank: false,
+            cwd: path.join(cwd, "child"),
+          },
+          {
+            sessionId: "session-sibling-cwd",
+            updatedAt: 5,
+            running: false,
+            blank: false,
+            cwd: `${cwd}-other`,
+          },
+          {
+            sessionId: "session-relative-cwd",
+            updatedAt: 4,
+            running: false,
+            blank: false,
+            cwd: "relative/workspace",
+          },
+          {
+            sessionId: "session-missing-cwd",
+            updatedAt: 3,
+            running: false,
+            blank: false,
+          },
+          {
+            sessionId: "   ",
+            updatedAt: 2,
+            running: false,
+            blank: false,
+            cwd,
+          },
+          {
+            sessionId: "session-invalid-time",
+            updatedAt: Number.POSITIVE_INFINITY,
+            running: false,
+            blank: false,
+            cwd,
+          },
+        ],
+      }),
+    );
+
+    await expect(adapter.listNativeSessionCandidates(cwd)).resolves.toEqual({
+      ok: true,
+      value: [
+        {
+          nativeSessionId: "session-titled",
+          title: "Native title",
+          updatedAt: 30,
+          cwd,
+          running: false,
+          blank: false,
+        },
+        {
+          nativeSessionId: "session-blank",
+          title: null,
+          updatedAt: 20,
+          cwd,
+          running: false,
+          blank: true,
+        },
+        {
+          nativeSessionId: "session-running",
+          title: null,
+          updatedAt: 10,
+          cwd,
+          running: true,
+          blank: false,
+        },
+        {
+          nativeSessionId: "session-malformed-title",
+          title: null,
+          updatedAt: 9,
+          cwd,
+          running: false,
+          blank: false,
+        },
+        {
+          nativeSessionId: "session-fork",
+          title: null,
+          updatedAt: 7,
+          cwd,
+          running: false,
+          blank: false,
+        },
+      ],
+    });
+    expect(connection.calls.list).toHaveBeenCalledWith({});
+    expect(connection.calls.history).not.toHaveBeenCalled();
+    expect(connection.calls.create).not.toHaveBeenCalled();
+    expect(connection.calls.fork).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
+  it("rejects an untrusted non-absolute discovery cwd before connecting", async () => {
+    const { adapter, connection } = fixture();
+
+    await expect(adapter.listNativeSessionCandidates("relative/workspace")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalidRequest", retryable: false },
+    });
+    expect(connection.connected).toBe(false);
+    expect(connection.calls.list).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
+  it("keeps candidate retries deterministic across empty and failed lists", async () => {
+    const { adapter, connection } = fixture();
+    const cwd = path.resolve("/workspace");
+    connection.calls.list
+      .mockResolvedValueOnce({
+        rpcId: RpcId("list-failed"),
+        result: {
+          ok: false,
+          error: { code: "internal", message: "list failed", details: {} },
+        },
+      })
+      .mockResolvedValueOnce(success({ items: [] }));
+
+    await expect(adapter.listNativeSessionCandidates(cwd)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "protocolError", retryable: false },
+    });
+    await expect(adapter.listNativeSessionCandidates(cwd)).resolves.toEqual({
+      ok: true,
+      value: [],
+    });
+    expect(connection.calls.list).toHaveBeenCalledTimes(2);
+    await adapter.close();
+  });
+
+  it("classifies candidate transport and schema failures by retryability", async () => {
+    const unavailable = fixture();
+    unavailable.connection.connectError = new DeepSeekHarnessTransportError(
+      "unavailable",
+      "DSH is unavailable",
+    );
+    await expect(
+      unavailable.adapter.listNativeSessionCandidates(path.resolve("/workspace")),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "unavailable", retryable: true },
+    });
+    await unavailable.adapter.close();
+
+    const malformed = fixture();
+    malformed.connection.calls.list.mockRejectedValueOnce(
+      Object.assign(new Error("invalid sessions.list value"), { name: "ZodError" }),
+    );
+    await expect(
+      malformed.adapter.listNativeSessionCandidates(path.resolve("/workspace")),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "protocolError", retryable: false },
+    });
+    await malformed.adapter.close();
+  });
+
+  it("revalidates resume identity, cwd, type, and running state before subscribing", async () => {
+    const cwd = path.resolve("/workspace");
+    const otherCwd = path.resolve("/other");
+    const cases = [
+      { name: "disappeared", items: [], code: "sessionNotFound", retryable: false },
+      {
+        name: "cwd changed",
+        items: [
+          { sessionId: SESSION_ID, updatedAt: 0, running: false, blank: false, cwd: otherCwd },
+        ],
+        code: "invalidRequest",
+        retryable: false,
+      },
+      {
+        name: "relative cwd",
+        items: [
+          {
+            sessionId: SESSION_ID,
+            updatedAt: 0,
+            running: false,
+            blank: false,
+            cwd: "relative/workspace",
+          },
+        ],
+        code: "protocolError",
+        retryable: false,
+      },
+      {
+        name: "subagent",
+        items: [
+          {
+            sessionId: SESSION_ID,
+            updatedAt: 0,
+            running: false,
+            blank: false,
+            cwd,
+            origin: "subagent" as const,
+          },
+        ],
+        code: "invalidRequest",
+        retryable: false,
+      },
+      {
+        name: "busy",
+        items: [{ sessionId: SESSION_ID, updatedAt: 0, running: true, blank: false, cwd }],
+        code: "sessionBusy",
+        retryable: true,
+      },
+      {
+        name: "duplicate identity",
+        items: [
+          { sessionId: SESSION_ID, updatedAt: 1, running: false, blank: false, cwd },
+          { sessionId: SESSION_ID, updatedAt: 0, running: false, blank: false, cwd },
+        ],
+        code: "protocolError",
+        retryable: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { adapter, connection } = fixture();
+      connection.calls.list.mockResolvedValueOnce(success({ items: testCase.items }));
+      const opened = await adapter.open({ kind: "resume", cwd, nativeRef: sessionRef(SESSION_ID) });
+      expect(opened, testCase.name).toMatchObject({
+        ok: false,
+        error: { code: testCase.code, retryable: testCase.retryable },
+      });
+      expect(connection.subscribers.size, testCase.name).toBe(0);
+      expect(connection.calls.history, testCase.name).not.toHaveBeenCalled();
+      expect(connection.calls.models, testCase.name).not.toHaveBeenCalled();
+      expect(connection.calls.create, testCase.name).not.toHaveBeenCalled();
+      expect(connection.calls.fork, testCase.name).not.toHaveBeenCalled();
+      expect(connection.calls.selectModel, testCase.name).not.toHaveBeenCalled();
+      expect(connection.calls.prompt, testCase.name).not.toHaveBeenCalled();
+      await adapter.close();
+    }
+
+    const invalidRequest = fixture();
+    await expect(
+      invalidRequest.adapter.open({
+        kind: "resume",
+        cwd: "relative/workspace",
+        nativeRef: sessionRef(SESSION_ID),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "invalidRequest", retryable: false },
+    });
+    expect(invalidRequest.connection.calls.list).not.toHaveBeenCalled();
+    await invalidRequest.adapter.close();
+  });
+
+  it("keeps a native busy rejection authoritative after the final list check", async () => {
+    const { adapter, connection } = fixture();
+    connection.calls.models.mockResolvedValueOnce({
+      rpcId: RpcId("busy-after-list"),
+      result: {
+        ok: false,
+        error: { code: "agent-busy", message: "Session became busy", details: {} },
+      },
+    });
+
+    await expect(
+      adapter.open({
+        kind: "resume",
+        cwd: path.resolve("/workspace"),
+        nativeRef: sessionRef(SESSION_ID),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "sessionBusy", retryable: true },
+    });
+    expect(connection.calls.list).toHaveBeenCalledTimes(1);
+    expect(connection.subscribers.size).toBe(0);
+    expect(connection.calls.create).not.toHaveBeenCalled();
+    expect(connection.calls.selectModel).not.toHaveBeenCalled();
+    expect(connection.calls.prompt).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
+  it("resumes an empty Session without applying draft Model, Thinking, or Permission defaults", async () => {
+    const { adapter, connection } = fixture();
+    const cwd = path.resolve("/workspace");
+    connection.enablePermissionModes();
+    connection.modelsBySession.set(SESSION_ID, {
+      provider: "deepseek-official",
+      model: "deepseek-v4-pro",
+      reasoningEffort: "max",
+    });
+    connection.setPermissionMode(SESSION_ID, "trusted-run", 0);
+    connection.history.set(SESSION_ID, []);
+
+    const opened = await adapter.open({
+      kind: "resume",
+      cwd,
+      nativeRef: sessionRef(SESSION_ID),
+      model: encodeDeepSeekHarnessModelRef(CURRENT_MODEL),
+      thinkingOptionId: "off",
+      permissionModeId: "team-safe",
+    } as never);
+    if (!opened.ok) throw new Error(opened.error.message);
+    expect(opened.value.initialState).toMatchObject({
+      effectiveModel: encodeDeepSeekHarnessModelRef({
+        provider: "deepseek-official",
+        model: "deepseek-v4-pro",
+      }),
+      effectiveThinkingOptionId: "max",
+      effectivePermissionModeId: "trusted-run",
+    });
+    await expect(opened.value.readSnapshot()).resolves.toMatchObject({
+      ok: true,
+      value: {
+        turns: [],
+        state: {
+          effectiveThinkingOptionId: "max",
+          effectivePermissionModeId: "trusted-run",
+        },
+      },
+    });
+    expect(connection.calls.create).not.toHaveBeenCalled();
+    expect(connection.calls.fork).not.toHaveBeenCalled();
+    expect(connection.calls.selectModel).not.toHaveBeenCalled();
+    expect(connection.calls.commandExecute).not.toHaveBeenCalled();
+    expect(connection.calls.prompt).not.toHaveBeenCalled();
+    expect(connection.calls.cancel).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
   it("inspects the local Host model catalog", async () => {
     const { adapter, connection } = fixture();
 
@@ -2382,7 +2786,7 @@ describe("DeepSeekHarnessAdapter local Host", () => {
       },
     });
     expect(connection.calls.create).not.toHaveBeenCalled();
-    expect(connection.calls.list).not.toHaveBeenCalled();
+    expect(connection.calls.list).toHaveBeenCalledTimes(1);
     await adapter.close();
   });
 
