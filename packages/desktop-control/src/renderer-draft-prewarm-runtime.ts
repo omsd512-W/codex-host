@@ -11,8 +11,16 @@ export interface RendererWebContents {
   debugger: RendererDebugger;
 }
 
+interface RendererComposerElement {
+  readonly parentElement: RendererComposerElement | null;
+  [key: string]: unknown;
+}
+
 export interface DraftPrewarmPolicyTarget {
   [key: string]: unknown;
+  document?: {
+    querySelectorAll(selectors: string): ArrayLike<RendererComposerElement>;
+  };
   addEventListener?: (type: string, listener: (event: Event) => void) => void;
   dispatchEvent?: (event: Event) => boolean;
   removeEventListener?: (type: string, listener: (event: Event) => void) => void;
@@ -81,6 +89,61 @@ export function installDraftPrewarmPolicyBridge(
   let currentCwd = typeof cachedCwd === "string" && cachedCwd.trim().length > 0 ? cachedCwd : null;
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
+  const currentComposerCwd = (): string | null | undefined => {
+    if (!target.document) return undefined;
+    const editors = Array.from(
+      target.document.querySelectorAll(
+        '[data-codex-composer], [contenteditable="true"][role="textbox"]',
+      ),
+    );
+    if (editors.length !== 1) return null;
+
+    let element: RendererComposerElement | null = editors[0] ?? null;
+    let fiber: Record<string, unknown> | null = null;
+    while (element !== null && fiber === null) {
+      const key = Object.getOwnPropertyNames(element).find((name) =>
+        name.startsWith("__reactFiber$"),
+      );
+      if (key) {
+        const candidate = element[key];
+        fiber = isRecord(candidate) ? candidate : null;
+      }
+      element = element.parentElement;
+    }
+
+    const candidates = new Set<string>();
+    let sawCwdMarker = false;
+    let invalidCwdMarker = false;
+    const collect = (value: unknown): void => {
+      if (
+        !isRecord(value) ||
+        !Object.prototype.hasOwnProperty.call(value, "cwd") ||
+        !Object.prototype.hasOwnProperty.call(value, "hostId") ||
+        value.hostId !== hostId
+      ) {
+        return;
+      }
+      sawCwdMarker = true;
+      if (typeof value.cwd === "string" && value.cwd.trim().length > 0) {
+        candidates.add(value.cwd);
+      } else {
+        invalidCwdMarker = true;
+      }
+    };
+
+    for (let depth = 0; fiber !== null && depth < 200; depth += 1) {
+      collect(fiber.memoizedProps);
+      let hook = isRecord(fiber.memoizedState) ? fiber.memoizedState : null;
+      for (let index = 0; hook !== null && index < 120; index += 1) {
+        collect(hook.memoizedState);
+        hook = isRecord(hook.next) ? hook.next : null;
+      }
+      fiber = isRecord(fiber.return) ? fiber.return : null;
+    }
+
+    if (!sawCwdMarker) return undefined;
+    return !invalidCwdMarker && candidates.size === 1 ? candidates.values().next().value : null;
+  };
   const isRemoteControlHost = hostId.startsWith("remote-control:");
   const knownExternalThreadIds = new Set<string>();
   const knownOfficialThreadIds = new Set<string>();
@@ -616,7 +679,8 @@ export function installDraftPrewarmPolicyBridge(
       return manager;
     },
     currentCwd(): string | null {
-      return currentCwd;
+      const composerCwd = currentComposerCwd();
+      return composerCwd === undefined ? currentCwd : composerCwd;
     },
     select(model: string | null): boolean {
       if (model !== null && (typeof model !== "string" || !model.startsWith("codexhost/"))) {

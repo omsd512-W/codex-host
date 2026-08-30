@@ -37,6 +37,24 @@ function requestBridgeFixture(
   };
 }
 
+function composerPolicyTarget(values: readonly unknown[]): DraftPrewarmPolicyTarget {
+  let hook: Record<string, unknown> | null = null;
+  for (const value of [...values].reverse()) {
+    hook = { memoizedState: value, next: hook };
+  }
+  const element: { parentElement: null; [key: string]: unknown } = { parentElement: null };
+  element["__reactFiber$fixture"] = {
+    memoizedProps: null,
+    memoizedState: hook,
+    return: null,
+  };
+  return {
+    document: {
+      querySelectorAll: () => [element],
+    },
+  };
+}
+
 function remoteRequestBridgeFixture(): {
   bridge: RendererHostRequestBridge;
   directSend: ReturnType<typeof vi.fn>;
@@ -517,6 +535,57 @@ describe("Renderer draft prewarm policy", () => {
       currentCwd(): string | null;
     };
     expect(policy.currentCwd()).toBe(expected);
+  });
+
+  it("reads the unique current Composer cwd when the prewarm cache is empty", () => {
+    const cwd = String.raw`E:\Coding\Project\codexhost`;
+    const target = composerPolicyTarget([
+      { cwd, hostId: "local", threadId: "thread-1" },
+      { cwd, hostId: "local", kind: "plain" },
+    ]);
+    installDraftPrewarmPolicyBridge(
+      requestManagerFixture(),
+      requestBridgeFixture(),
+      "local",
+      target,
+      {
+        discardAllPrewarmedThreads: vi.fn(),
+        prewarmedThreadByCwd: new Map(),
+      },
+    );
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      currentCwd(): string | null;
+    };
+    expect(policy.currentCwd()).toBe(cwd);
+  });
+
+  it("prefers the current Composer cwd and fails closed when its markers conflict", () => {
+    const first = { cwd: "/tmp/current", hostId: "local" };
+    const second = { cwd: "/tmp/current", hostId: "local" };
+    const target = composerPolicyTarget([first, second]);
+    installDraftPrewarmPolicyBridge(
+      requestManagerFixture(),
+      requestBridgeFixture(),
+      "local",
+      target,
+      {
+        discardAllPrewarmedThreads: vi.fn(),
+        prewarmedThreadByCwd: new Map([["/tmp/stale", {}]]),
+      },
+    );
+
+    const policy = target.__codexhostDraftPrewarmPolicyV1 as {
+      currentCwd(): string | null;
+    };
+    expect(policy.currentCwd()).toBe("/tmp/current");
+    second.cwd = "/tmp/conflict";
+    expect(policy.currentCwd()).toBeNull();
+    second.cwd = "/tmp/current";
+    first.cwd = "  ";
+    expect(policy.currentCwd()).toBeNull();
+    second.cwd = "  ";
+    expect(policy.currentCwd()).toBeNull();
   });
 
   it("captures a cached official draft cwd and later non-ephemeral starts", async () => {
