@@ -67,6 +67,36 @@ afterEach(async () => {
 });
 
 describe("ExternalThreadRepository", () => {
+  it("projects a derived Snapshot before committing its ready identity", async () => {
+    const directory = await temporaryStoreDirectory();
+    const store = new MappingStore({ directory });
+    const repository = new ExternalThreadRepository(store);
+    await repository.initialize();
+    const provisional = await store.createProvisional({
+      hostThreadId,
+      createRequestId: "create-invalid-projection",
+      harnessId,
+      cwd: "/synthetic",
+      title: "Invalid projection",
+      transportModelId: "codexhost/claude-code-native",
+      ephemeral: false,
+      historyMode: "legacy",
+    });
+    const malformed = {
+      turns: [{ ...snapshotTurn("native-a"), outcome: null }],
+    } as unknown as HostThreadSnapshot;
+
+    await expect(
+      repository.commitDerivedSnapshot(provisional, nativeSessionRef, malformed),
+    ).rejects.toBeInstanceOf(Error);
+    await expect(store.getThread(hostThreadId)).resolves.toMatchObject({
+      state: "creating",
+      turnMappings: [],
+    });
+    await repository.removeProvisional(hostThreadId);
+    await repository.close();
+  });
+
   it("commits a last-Turn replacement with retained Host Turn identity", async () => {
     const directory = await temporaryStoreDirectory();
     const store = new MappingStore({ directory });

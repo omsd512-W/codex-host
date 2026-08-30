@@ -15,6 +15,10 @@ import { parseHostUsage, type HostUsage } from "@codexhost/harness-adapter";
 import type { StoredThreadRecordV1 } from "@codexhost/mapping-store";
 import {
   accountCreditsSnapshotSchema,
+  deepSeekNativeSessionCandidatesParamsSchema,
+  deepSeekNativeSessionCandidatesResultSchema,
+  deepSeekNativeSessionLinkParamsSchema,
+  deepSeekNativeSessionLinkResultSchema,
   externalThreadForkParamsSchema,
   harnessCommandCatalogSchema,
   harnessIdSchema,
@@ -53,6 +57,7 @@ import {
   type HostTurnId,
 } from "@codexhost/shared-contracts";
 import { executeExternalThreadFork } from "./external-thread-fork.js";
+import { DeepSeekNativeSessionLinker } from "./deepseek-native-session-link.js";
 import {
   ExternalHistoryRequestError,
   listExternalItems,
@@ -105,6 +110,8 @@ import type { HostUpdateCoordinator } from "./update-coordinator.js";
 
 const SUBAGENT_TERMINAL_REFRESH_DELAYS_MS = [0, 50, 100, 150] as const;
 const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
+const DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD = "codexhost/deepseek/native-session/candidates";
+const DEEPSEEK_NATIVE_SESSION_LINK_METHOD = "codexhost/deepseek/native-session/link";
 // Native Codex account quota is still pulled through its official API; keep
 // that reading briefly cached so concurrent Composer inspections coalesce.
 const OFFICIAL_RATE_LIMIT_TTL_MS = 15_000;
@@ -274,8 +281,13 @@ function rpcEnvelope(request: JsonRpcRequest, value: JsonObject): JsonObject {
   };
 }
 
-function rpcError(request: JsonRpcRequest, code: number, message: string): JsonObject {
-  return rpcEnvelope(request, { error: { code, message } });
+function rpcError(
+  request: JsonRpcRequest,
+  code: number,
+  message: string,
+  data?: JsonObject,
+): JsonObject {
+  return rpcEnvelope(request, { error: { code, message, ...(data ? { data } : {}) } });
 }
 
 function unixSeconds(): number {
@@ -422,6 +434,7 @@ export class AppServerHost {
   #official: OfficialAppServerConnection | null = null;
   #externalAdapters: Map<ExternalHarnessId, HarnessAdapter>;
   #externalRuntime: ExternalThreadRuntime;
+  #deepSeekNativeSessionLinker: DeepSeekNativeSessionLinker;
   #repository: ExternalThreadRepository;
   #pendingDesktopApprovals = new Map<HostApprovalRequestId, PendingDesktopApproval>();
   #pendingDesktopQuestions = new Map<HostQuestionRequestId, PendingDesktopQuestion>();
@@ -475,6 +488,13 @@ export class AppServerHost {
       repository: this.#repository,
       consumeOutputs: (thread) => this.#consumeHarnessOutputs(thread),
       diagnose: (error) => this.#diagnose(error),
+    });
+    this.#deepSeekNativeSessionLinker = new DeepSeekNativeSessionLinker({
+      adapter: this.#externalAdapters.get("deepseek-harness"),
+      diagnose: (error) => this.#diagnose(error),
+      environment: this.#options.environment ?? process.env,
+      repository: this.#repository,
+      runtime: this.#externalRuntime,
     });
     this.#delegationCoordinator = new HarnessDelegationCoordinator({
       adapters: this.#externalAdapters,
@@ -617,6 +637,14 @@ export class AppServerHost {
       }
       if (request.method === "codexhost/harness/inspect") {
         this.#dispatchDesktopRequest(() => this.#inspectHarness(request));
+        continue;
+      }
+      if (request.method === DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD) {
+        this.#dispatchDesktopRequest(() => this.#listDeepSeekNativeSessionCandidates(request));
+        continue;
+      }
+      if (request.method === DEEPSEEK_NATIVE_SESSION_LINK_METHOD) {
+        await this.#linkDeepSeekNativeSession(request);
         continue;
       }
       if (request.method === "codexhost/thread/fork") {
@@ -1572,6 +1600,68 @@ export class AppServerHost {
     await this.#writer.json({
       method: archived ? "thread/archived" : "thread/unarchived",
       params: { threadId: record.hostThreadId },
+    });
+  }
+
+  async #listDeepSeekNativeSessionCandidates(request: JsonRpcRequest): Promise<void> {
+    const parsed = deepSeekNativeSessionCandidatesParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      await this.#writer.json(
+        rpcError(request, -32602, "DeepSeek Native Session candidate request is invalid", {
+          retryable: false,
+        }),
+      );
+      return;
+    }
+    const result = await this.#deepSeekNativeSessionLinker.candidates(parsed.data.cwd);
+    if (!result.ok) {
+      await this.#writer.json(
+        rpcError(request, result.error.code, result.error.message, {
+          retryable: result.error.retryable,
+        }),
+      );
+      return;
+    }
+    await this.#writer.json(
+      rpcEnvelope(request, {
+        result: deepSeekNativeSessionCandidatesResultSchema.parse({
+          candidates: result.candidates,
+        }),
+      }),
+    );
+  }
+
+  async #linkDeepSeekNativeSession(request: JsonRpcRequest): Promise<void> {
+    const parsed = deepSeekNativeSessionLinkParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      await this.#writer.json(
+        rpcError(request, -32602, "DeepSeek Native Session link request is invalid", {
+          retryable: false,
+        }),
+      );
+      return;
+    }
+    const result = await this.#deepSeekNativeSessionLinker.link(
+      parsed.data.cwd,
+      parsed.data.nativeSessionId,
+    );
+    if (!result.ok) {
+      await this.#writer.json(
+        rpcError(request, result.error.code, result.error.message, {
+          retryable: result.error.retryable,
+        }),
+      );
+      return;
+    }
+    await this.#writer.json(
+      rpcEnvelope(request, {
+        result: deepSeekNativeSessionLinkResultSchema.parse({ threadId: result.linked.id }),
+      }),
+    );
+    await this.#writer.json({
+      method: "thread/started",
+      emittedAtMs: Date.now(),
+      params: { thread: result.thread },
     });
   }
 

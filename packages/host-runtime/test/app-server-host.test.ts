@@ -30,6 +30,7 @@ import {
   hostItemIdSchema,
   hostThreadIdSchema,
   hostTurnIdSchema,
+  type DeepSeekNativeSessionCandidate,
 } from "@codexhost/shared-contracts";
 
 import type {
@@ -199,6 +200,21 @@ class ResumeStateRollbackAdapter extends FakeHarnessAdapter {
   }
 }
 
+class LinkableDeepSeekAdapter extends FakeHarnessAdapter {
+  candidates: DeepSeekNativeSessionCandidate[] = [];
+
+  constructor() {
+    super(harnessIdSchema.parse("deepseek-harness"));
+  }
+
+  async listNativeSessionCandidates(): Promise<{
+    ok: true;
+    value: DeepSeekNativeSessionCandidate[];
+  }> {
+    return { ok: true, value: structuredClone(this.candidates) };
+  }
+}
+
 function createFixture(
   options: {
     environment?: NodeJS.ProcessEnv;
@@ -330,6 +346,127 @@ async function stopFixture(fixture: ReturnType<typeof createFixture>): Promise<v
 }
 
 describe("AppServerHost HarnessAdapter projection", () => {
+  it("lists and links an existing DeepSeek Native Session through fixed methods", async () => {
+    const adapter = new LinkableDeepSeekAdapter();
+    const cwd = path.resolve("synthetic-deepseek-link");
+    const created = await adapter.open({ kind: "create", cwd });
+    if (!created.ok || !(created.value instanceof FakeHarnessSession)) {
+      throw new Error("Fake DeepSeek Native Session was not created");
+    }
+    const nativeSessionId = created.value.initialState.nativeRef?.nativeSessionId;
+    if (!nativeSessionId) throw new Error("Fake DeepSeek Session has no Native identity");
+    adapter.candidates = [
+      {
+        nativeSessionId,
+        title: "Existing DSH Session",
+        updatedAt: Date.now(),
+        cwd,
+        running: false,
+        blank: true,
+      },
+    ];
+    const open = vi.spyOn(adapter, "open");
+    const fixture = createFixture({
+      externalAdapters: new Map<ExternalHarnessId, FakeHarnessAdapter>([
+        ["deepseek-harness", adapter],
+      ]),
+    });
+
+    writeRequest(fixture.desktopInput, {
+      id: 900,
+      method: "codexhost/deepseek/native-session/candidates",
+      params: { cwd },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 900)),
+    ).resolves.toMatchObject({
+      result: { candidates: [{ nativeSessionId, title: "Existing DSH Session", cwd }] },
+    });
+
+    writeRequest(fixture.desktopInput, {
+      id: 901,
+      method: "codexhost/deepseek/native-session/link",
+      params: { cwd, nativeSessionId },
+    });
+    const response = await fixture.collector.waitFor((message) => requestId(message, 901));
+    const threadId = (response.result as JsonObject | undefined)?.threadId;
+    expect(typeof threadId).toBe("string");
+    if (typeof threadId !== "string") throw new Error("Link result has no Thread ID");
+    await expect(
+      fixture.collector.waitFor(
+        (message) =>
+          method(message, "thread/started") &&
+          (messageParams(message).thread as JsonObject | undefined)?.id === threadId,
+      ),
+    ).resolves.toBeDefined();
+    expect(await fixture.mappingStore.getThread(hostThreadIdSchema.parse(threadId))).toMatchObject({
+      state: "ready",
+      title: "Existing DSH Session",
+      nativeSessionRef: { nativeSessionId },
+    });
+    const resumeInput = open.mock.calls.at(-1)?.[0];
+    expect(resumeInput).toMatchObject({ kind: "resume", cwd });
+    expect(resumeInput).not.toHaveProperty("model");
+    expect(resumeInput).not.toHaveProperty("thinkingOptionId");
+    expect(resumeInput).not.toHaveProperty("permissionModeId");
+
+    writeRequest(fixture.desktopInput, {
+      id: 902,
+      method: "codexhost/deepseek/native-session/candidates",
+      params: { cwd },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 902)),
+    ).resolves.toMatchObject({ result: { candidates: [] } });
+
+    const internalList = new Promise<JsonObject>((resolve) => {
+      fixture.official.stdin.once("data", (chunk: Buffer) => {
+        const request = JSON.parse(chunk.toString("utf8")) as JsonObject;
+        resolve(request);
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: request.id,
+            result: { data: [], nextCursor: null, backwardsCursor: null },
+          })}\n`,
+        );
+      });
+    });
+    writeRequest(fixture.desktopInput, {
+      id: 903,
+      method: "thread/list",
+      params: { limit: 10 },
+    });
+    await expect(internalList).resolves.toMatchObject({ method: "thread/list" });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 903)),
+    ).resolves.toMatchObject({ result: { data: [{ id: threadId }] } });
+
+    writeRequest(fixture.desktopInput, {
+      id: 904,
+      method: "thread/read",
+      params: { threadId, includeTurns: false },
+    });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 904)),
+    ).resolves.toMatchObject({ result: { thread: { id: threadId, turns: [] } } });
+
+    writeRequest(fixture.desktopInput, {
+      id: 905,
+      method: "turn/start",
+      params: { threadId, input: [{ type: "text", text: "continue imported session" }] },
+    });
+    const turnResponse = await fixture.collector.waitFor((message) => requestId(message, 905));
+    const turnId = ((turnResponse.result as JsonObject | undefined)?.turn as JsonObject | undefined)
+      ?.id;
+    if (typeof turnId !== "string") throw new Error("Imported Turn has no ID");
+    created.value.appendText("continued");
+    created.value.succeedTurn();
+    await expect(
+      fixture.collector.waitFor((message) => turnEvent(message, "turn/completed", turnId)),
+    ).resolves.toBeDefined();
+    await stopFixture(fixture);
+  });
+
   it("uses an injected shared listener connection without spawning a stdio app-server", async () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();

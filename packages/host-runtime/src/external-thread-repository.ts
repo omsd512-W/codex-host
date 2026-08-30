@@ -238,23 +238,21 @@ export class ExternalThreadRepository {
         ...(turn.checkpoint ? { nativeCheckpointRef: turn.checkpoint } : {}),
       };
     });
+    const turns = snapshot.turns.map((turn, index) => {
+      const mapping = mappings[index];
+      if (!mapping) throw new Error("Derived Snapshot mapping is incomplete");
+      return projectHistoricalTurn({
+        turnId: mapping.hostTurnId,
+        cwd: record.cwd,
+        snapshot: turn,
+      });
+    });
     const nextRecord = await this.store.commitReady({
       hostThreadId: record.hostThreadId,
       nativeSessionRef,
       turnMappings: mappings,
     });
-    return {
-      record: nextRecord,
-      turns: snapshot.turns.map((turn, index) => {
-        const mapping = mappings[index];
-        if (!mapping) throw new Error("Derived Snapshot mapping is incomplete");
-        return projectHistoricalTurn({
-          turnId: mapping.hostTurnId,
-          cwd: record.cwd,
-          snapshot: turn,
-        });
-      }),
-    };
+    return { record: nextRecord, turns };
   }
 
   async commitForkRollback(
