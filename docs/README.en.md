@@ -142,6 +142,9 @@ Fully quit Codex Desktop, open a new terminal, and start codexhost.
 | Context compaction | Native | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Slash commands | Native | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Edit previous message | Native | ✅ | ✅ | ✅ | ✅ | — |
+| Open existing Native Sessions | — | — | — | — | — | ✅ |
+
+When creating a new task with DeepSeek Harness, use “Open existing session” to link an ordinary, unmapped Session from the current DSH profile whose cwd exactly matches the workspace. codexhost persists only the Codex Thread ↔ DSH Native Session and Turn ID mappings; it does not copy or delete Native records. The Session’s Model, Thinking, Permission Mode, and history remain authoritative in DSH. `running` is only a list-time snapshot, and the Native DSH resume result is final.
 
 ## Cross-Agent collaboration
 

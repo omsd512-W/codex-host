@@ -144,6 +144,9 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 | 上下文压缩 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 斜杠命令 | 原生 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 修订上一条消息 | 原生 | ✅ | ✅ | ✅ | ✅ | — |
+| 打开已有 Native Session | — | — | — | — | — | ✅ |
+
+选择 DeepSeek Harness 新建任务时，可用“打开已有会话”关联当前 DSH profile 中与工作区 cwd 精确匹配、尚未映射且非 Subagent 的会话。codexhost 只持久化 Codex Thread ↔ DSH Native Session 及 Turn ID 映射，不复制或删除原生记录；会话的 Model、Thinking、权限模式和历史以 DSH 为准。`running` 只是列表时的瞬时状态，最终是否可恢复以 DSH 原生结果为准。
 
 ## 跨 Agent 协作
 

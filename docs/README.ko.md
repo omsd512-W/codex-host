@@ -141,6 +141,9 @@ xattr -dr com.apple.quarantine /Applications/codexhost.app
 | 컨텍스트 압축 | 기본 제공 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 슬래시 명령 | 기본 제공 | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 이전 메시지 수정 | 기본 제공 | ✅ | ✅ | ✅ | ✅ | — |
+| 기존 Native Session 열기 | — | — | — | — | — | ✅ |
+
+새 작업에서 DeepSeek Harness를 선택하면 “기존 세션 열기”로 현재 DSH profile의 세션 중 workspace cwd가 정확히 일치하고, 아직 매핑되지 않았으며, Subagent가 아닌 세션을 연결할 수 있습니다. codexhost는 Codex Thread ↔ DSH Native Session 및 Turn ID 매핑만 저장하며 Native 기록을 복사하거나 삭제하지 않습니다. 세션의 Model, Thinking, 권한 모드, 기록은 DSH 상태를 기준으로 합니다. `running`은 목록 조회 시점의 스냅샷일 뿐이며, 최종 복구 가능 여부는 DSH의 Native 결과를 기준으로 합니다.
 
 ## Agent 간 협업
 

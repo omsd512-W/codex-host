@@ -57,14 +57,13 @@ Renderer list
 → DeepSeek Adapter sessions.list + cwd/type filter
 → Mapping Store mapped exclusion
 → Renderer selects Native Session ID
+→ Renderer clears draft prewarm
 → Host strict parse + in-flight guard
 → DeepSeek Adapter fresh sessions.list final revalidation
 → Mapping Store fresh mapped recheck
 → createProvisional(new Host Thread ID, native title, cwd)
 → adapter.open(resume, exact NativeSessionRef, cwd)
 → session.readSnapshot()
-→ native state-derived transport carrier
-→ provisional carrier update
 → repository.commitDerivedSnapshot()
 → ExternalThreadRuntime.register()
 → response { threadId }
@@ -72,7 +71,7 @@ Renderer list
 → Renderer opens matching standard sidebar row
 ```
 
-`open(resume)` 不接收 draft Model、Thinking 或 Permission。Adapter 从 `sessions.models()` 与 history-tail projection读取当前原生状态。Mapping carrier只表达 Native readback 可证明的状态；Snapshot state 是立即打开和再次检查的权威。空 Snapshot以 ready record、空 Turn mappings 和可继续的 loaded Session提交。
+`open(resume)` 不接收 draft Model、Thinking 或 Permission。Adapter 从 `sessions.models()` 与 history-tail projection读取当前原生状态。导入记录初始只使用通用 DeepSeek Harness transport carrier 表达 Harness ownership，不把 draft 默认值写入 carrier；关联当次及该通用 carrier 仍被持久化时的冷恢复，都不重放配置选择，以 Session initial state 与 fresh Snapshot state 为当前 Native 配置权威。只有用户之后在 Desktop 显式选择 Model、Thinking 或 Permission Mode 时，现有配置确认流程才更新 carrier，后续冷恢复继续沿用既有 carrier 恢复语义。空 Snapshot以 ready record、空 Turn mappings 和可继续的 loaded Session提交。
 
 ### 5. 最终 resume 复查阻止候选绕过
 
@@ -83,7 +82,7 @@ Host link 在 provisional 前重新发现一次；DeepSeek `open(resume)` 又使
 ### 6. 失败回滚按 durable commit 边界划分
 
 - provisional 前失败：不写 Host 状态。
-- provisional 后的 resume、readSnapshot、状态读取、alignment、carrier 更新或 commit 失败：关闭本地 HarnessSession（解除订阅），删除 provisional。
+- provisional 后的 resume、readSnapshot、状态校验、alignment 或 commit 失败：关闭本地 HarnessSession（解除订阅），删除 provisional。
 - commit 成功但 runtime registration 失败：移除 runtime、关闭本地 Session并删除 ready record。
 - cleanup 失败只写诊断，不覆盖主错误；不得返回半成功。
 - response 写失败发生在完整 ready commit和 runtime registration 后；Thread 仍可由标准列表/冷恢复读取。
@@ -100,13 +99,13 @@ loading → empty | error | ready → linking → opening
 
 Dialog 提供 `aria-labelledby`/`aria-describedby`、status/alert、单选列表、Arrow/Home/End、Enter/Space、Escape、Tab、disabled 状态和关闭后的 opener 焦点恢复。所有用户文案进入现有 Renderer Harness 本地化目录。
 
-每次 open/retry/close/dispose 递增 generation并中止旧请求/导航。list 与 link 结果只有在 Composer identity、default target、Agent、Host、cwd、选择和 generation 全部仍匹配时才能应用。Host 已提交但 UI 变陈旧时，Thread 留在标准列表但不得自动打开。
+每次 open/retry/close/dispose 递增 generation，使旧 list/link 响应失效，并通过 AbortController 中止旧 sidebar 导航。list 与 link 结果只有在 Composer identity、default target、Agent、Host、cwd、选择和 generation 全部仍匹配时才能应用。Host 已提交但 UI 变陈旧时，Thread 留在标准列表但不得自动打开。
 
 Sidebar 导航复用现有 Fork 的 MutationObserver 等待逻辑，并同时匹配 Host ID 与 Thread ID；超时、Abort 或 dispose 都清理 observer/timer，避免不同 Host 同 ID 行被点击。
 
 ### 8. 标准 Thread 行为不分叉
 
-ready Mapping Store record 自动进入现有聚合 `thread/list`。首次关联的 Turn mappings由完整 Snapshot分配；后续 live Turn 走 `persistTurn()`。重启或再次打开走 `adapter.open(resume) → readSnapshot → alignSnapshot → reconcileTurnMappings`，保留已有 Host Turn ID并补齐 DSH 外部新增的 Native Turn。
+ready Mapping Store record 自动进入现有聚合 `thread/list`。首次关联的 Turn mappings由完整 Snapshot分配；后续 live Turn 走 `persistTurn()`。重启或再次打开走 `adapter.open(resume) → readSnapshot → alignSnapshot → reconcileTurnMappings`，保留已有 Host Turn ID并补齐 DSH 外部新增的 Native Turn。初始通用 carrier 不重放 Model 或 Permission Mode，fresh Snapshot state 为权威；用户后续显式配置产生了已确认 carrier 后，则保持现有冷恢复语义。
 
 `thread/delete` 继续只删除 Mapping Store record并关闭本地 Session，不调用 DSH delete；Native Session 数据继续由 DSH profile拥有。
 

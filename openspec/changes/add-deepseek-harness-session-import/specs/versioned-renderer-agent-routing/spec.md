@@ -34,7 +34,7 @@ Renderer SHALL use one lightweight Dialog or Popover with loading, empty, error,
 #### Scenario: User cancels
 
 - **WHEN** no link commit is in flight and the user presses Escape or closes the Dialog
-- **THEN** pending discovery/navigation SHALL be aborted
+- **THEN** pending discovery responses SHALL be invalidated and pending sidebar navigation SHALL be aborted
 - **AND** focus SHALL return to the entry that opened it
 
 ### Requirement: Link results are generation-scoped and open the exact Thread

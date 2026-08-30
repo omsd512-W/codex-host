@@ -63,13 +63,14 @@ Host SHALL allocate one provisional external Host Thread, resume the exact exist
 
 ### Requirement: Native configuration remains authoritative
 
-Linking SHALL preserve the existing Native Session's current Model, Thinking, Permission Mode, and history. Host and Renderer MUST NOT apply new-task defaults to the resumed Session; display and transport metadata SHALL come only from Adapter-confirmed Native state.
+Linking SHALL preserve the existing Native Session's current Model, Thinking, Permission Mode, and history. Host and Renderer MUST NOT apply new-task defaults to the resumed Session. For the initial link and later resumes while its generic DeepSeek Harness routing carrier remains stored, Adapter-confirmed initial and fresh Snapshot state SHALL be authoritative for displayed configuration and no configuration selection SHALL be replayed. The initial ready record SHALL NOT encode draft defaults. The existing confirmed configuration-selection flow MAY update that carrier after a later explicit user selection, after which existing cold-recovery carrier semantics SHALL continue to apply.
 
 #### Scenario: Draft defaults differ from Native state
 
 - **WHEN** the DeepSeek new-task draft currently shows different Model, Thinking, or Permission selections
 - **THEN** link SHALL omit those values from `open(resume)`
 - **AND** the opened Thread SHALL display the Session's native current values
+- **AND** its initial persisted carrier SHALL contain none of the draft selections
 
 ### Requirement: Link failure rolls back Host state
 
@@ -77,7 +78,7 @@ Any failure during provisional creation, resume, Snapshot read, state validation
 
 #### Scenario: A pre-commit stage fails
 
-- **WHEN** resume, Snapshot, alignment, carrier update, or ready commit fails
+- **WHEN** resume, Snapshot, state validation, alignment, or ready commit fails
 - **THEN** Host SHALL close the local Session handle and remove the provisional mapping
 - **AND** it SHALL emit no `thread/started`
 

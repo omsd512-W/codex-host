@@ -49,7 +49,7 @@ Codex Desktop
 | OMP | CLI 原生 RPC | create、resume、fork、跨 cwd fork、rollback | Model、Thinking | 无 Host Interaction | Usage、Commands、Compaction、Subagent、Autonomous Turn |
 | Claude Code | Claude Agent SDK | create、resume、fork、rollback；fork 不跨 cwd | Model、Thinking、Permission Mode | Approval、Question | Usage、Credits、Commands、Subagent、Autonomous Turn |
 | Grok | ACP 加私有扩展 | create、resume、fork、跨 cwd fork、rollback | Model、Thinking、Permission Mode | Approval | Usage、Credits、Commands、Compaction |
-| DeepSeek Harness | 原生 Host API / RPC | create、resume、fork；fork 不跨 cwd | Model、Thinking | Approval、Question | Usage、Commands、Compaction、分页历史、共享 Host 连接 |
+| DeepSeek Harness | 原生 Host API / RPC | create、resume、fork；fork 不跨 cwd；关联已有 Session | Model、Thinking、Permission Mode | Approval、Question | Usage、Commands、Compaction、分页历史、共享 Host 连接 |
 
 原生 Codex 通过官方 App Server 协议接入，不实现外部 `HarnessAdapter`，不是新增外部 Harness 的参考模板。
 
@@ -80,6 +80,7 @@ Codex Desktop
 | SDK Transport 与复杂流式事件 | Claude Code | — |
 | RPC Transport、进程管理与历史文件 | Pi | OMP |
 | 共享长连接、多 Session 订阅与分页历史 | DeepSeek Harness | — |
+| 从当前 profile 关联同 cwd 的已有 Native Session | DeepSeek Harness | — |
 | Model Catalog 与 Model/Thinking 联动 | Pi | OMP、Claude Code、DeepSeek Harness |
 | Permission Mode 与 unattended execution policy | Claude Code | Grok、OMP |
 | Approval + Question | Claude Code | DeepSeek Harness |
@@ -160,12 +161,16 @@ DeepSeek Harness 最适合参考服务化 Host 接入：
 - Session 订阅和 Mux 路由；
 - 原生 Approval/Question RPC；
 - 分页读取完整历史；
+- 通过 `sessions.list` 发现当前 profile 中同 cwd 的已有会话，并只建立 Mapping Store 映射；
 - 原生 Model/Thinking 目录与选择；
+- 原生 Permission Mode 目录、状态与选择；
 - 显式注册的 Harness Commands 和原生 compaction；
 - 基于 `turn/end` Checkpoint 的同 cwd 精确 Fork；
 - Usage 基线和增量合并。
 
-当前它不支持跨 cwd Fork、rollback、Permission Mode 或 Subagent。不要从它推断这些能力可以省略；应根据目标 Harness 的原生能力决定。
+当前它不支持跨 cwd Fork、rollback 或 Subagent。不要从它推断这些能力可以省略；应根据目标 Harness 的原生能力决定。
+
+锁定的 DSH rc.2 协议中，`sessions.list.running` 只是瞬时状态，不是 attach/claim/lease；协议也没有 Session close/delete/detach 或原子 import 操作。关联流程必须以最终 Native resume 结果为准，且只声明 codexhost 不调用原生变更命令；冷恢复时 DSH 自身仍可能持久化 `session/end-seed`。
 
 ## 公共契约的核心语义
 
