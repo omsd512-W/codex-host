@@ -72,6 +72,7 @@ export function installDraftPrewarmPolicyBridge(
   const originalOnNotification = manager.onNotification;
   const originalDispatchAppServerResponse = manager.dispatchAppServerResponse;
   let selectedModel: string | null = null;
+  let currentCwd: string | null = null;
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value);
   const isRemoteControlHost = hostId.startsWith("remote-control:");
@@ -500,6 +501,19 @@ export function installDraftPrewarmPolicyBridge(
     );
   };
   const routeThreadStart = (parameters: unknown): unknown => {
+    if (
+      isRecord(parameters) &&
+      parameters.ephemeral !== true &&
+      typeof parameters.cwd === "string" &&
+      parameters.cwd.trim().length > 0
+    ) {
+      if (currentCwd !== parameters.cwd) {
+        currentCwd = parameters.cwd;
+        if (typeof target.dispatchEvent === "function" && typeof CustomEvent === "function") {
+          target.dispatchEvent(new CustomEvent("codexhost:draft-prewarm-policy-changed"));
+        }
+      }
+    }
     if (selectedModel === null || !isRecord(parameters) || parameters.ephemeral === true) {
       return parameters;
     }
@@ -595,6 +609,9 @@ export function installDraftPrewarmPolicyBridge(
     requestTarget(): RendererHostRequestManager {
       return manager;
     },
+    currentCwd(): string | null {
+      return currentCwd;
+    },
     select(model: string | null): boolean {
       if (model !== null && (typeof model !== "string" || !model.startsWith("codexhost/"))) {
         throw new Error("Draft route Model must be a codexhost transport carrier");
@@ -637,6 +654,7 @@ export function installDraftPrewarmPolicyBridge(
       knownOfficialThreadIds.clear();
       threadOwnershipResolutions.clear();
       selectedModel = null;
+      currentCwd = null;
     },
   });
   Object.defineProperty(target, "__codexhostDraftPrewarmPolicyV1", {

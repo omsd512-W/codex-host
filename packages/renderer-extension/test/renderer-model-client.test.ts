@@ -10,6 +10,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD,
+  DEEPSEEK_NATIVE_SESSION_LINK_METHOD,
   HARNESS_INSPECT_METHOD,
   THREAD_FORK_METHOD,
   THREAD_INSPECT_METHOD,
@@ -142,6 +144,8 @@ describe("Renderer fixed Model request client", () => {
       "inspectThread",
       "inspectThreadCommands",
       "inspectThreadUsage",
+      "linkDeepSeekNativeSession",
+      "listDeepSeekNativeSessionCandidates",
       "listThreadOwnership",
       "readUpdateStatus",
       "selectThreadModel",
@@ -268,6 +272,49 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest).toHaveBeenNthCalledWith(10, UPDATE_CHECK_METHOD, {});
     expect(sendRequest).toHaveBeenNthCalledWith(11, UPDATE_START_METHOD, {});
     expect(sendRequest).toHaveBeenNthCalledWith(12, UPDATE_STATUS_METHOD, {});
+  });
+
+  it("uses only the fixed DeepSeek candidate and link methods with strict contracts", async () => {
+    const sendRequest = vi
+      .fn<(method: string, params: unknown) => Promise<unknown>>()
+      .mockResolvedValueOnce({
+        candidates: [
+          {
+            nativeSessionId: "native-1",
+            title: null,
+            updatedAt: 1_700_000_000_000,
+            cwd: "C:\\work",
+            running: false,
+            blank: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ threadId: "linked-thread" });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Model client was not created");
+
+    await expect(
+      client.listDeepSeekNativeSessionCandidates({ cwd: "C:\\work" }),
+    ).resolves.toMatchObject({ candidates: [{ nativeSessionId: "native-1", title: null }] });
+    await expect(
+      client.linkDeepSeekNativeSession({ cwd: "C:\\work", nativeSessionId: "native-1" }),
+    ).resolves.toEqual({ threadId: "linked-thread" });
+    expect(sendRequest).toHaveBeenNthCalledWith(1, DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD, {
+      cwd: "C:\\work",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, DEEPSEEK_NATIVE_SESSION_LINK_METHOD, {
+      cwd: "C:\\work",
+      nativeSessionId: "native-1",
+    });
+
+    await expect(
+      client.linkDeepSeekNativeSession({
+        cwd: "C:\\work",
+        nativeSessionId: "native-1",
+        model: "must-not-cross-renderer-boundary",
+      } as never),
+    ).rejects.toThrow();
+    expect(sendRequest).toHaveBeenCalledTimes(2);
   });
 
   it("defers Usage notification registration until a request manager is available", () => {

@@ -47,6 +47,11 @@ import {
   mountRendererHarnessCommandControl,
   type RendererHarnessCommandControl,
 } from "./renderer-harness-command-control.js";
+import {
+  mountRendererDeepSeekSessionDialog,
+  type RendererDeepSeekSessionContext,
+  type RendererDeepSeekSessionDialogControl,
+} from "./renderer-deepseek-session-dialog.js";
 
 export { CONTROL_ATTRIBUTE };
 export type ExternalModelControlView = RendererModelControlView;
@@ -92,6 +97,7 @@ export interface ComposerAgentControl {
   usage: RendererUsageControl | null;
   composerId: string;
   harnessCommands: RendererHarnessCommandControl;
+  deepSeekSessions: RendererDeepSeekSessionDialogControl;
   sendButton: HTMLButtonElement;
   sendDisabledBeforeSwitch: boolean | null;
 }
@@ -122,7 +128,8 @@ function isOwnedRendererControl(element: Element): boolean {
     element.hasAttribute("data-codexhost-permission-mode-control") ||
     element.hasAttribute("data-codexhost-usage-control") ||
     element.hasAttribute("data-codexhost-credits-control") ||
-    element.hasAttribute("data-codexhost-harness-command-control")
+    element.hasAttribute("data-codexhost-harness-command-control") ||
+    element.hasAttribute("data-codexhost-deepseek-session-control")
   );
 }
 
@@ -485,20 +492,24 @@ function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
   const sendButton = control.sendButton;
   const modelRoot = control.modelPicker?.root;
   const agentRoot = control.root ?? control.picker?.root;
-  if (!sendButton || !modelRoot || !agentRoot) return;
+  const deepSeekSessionRoot = control.deepSeekSessions?.root;
+  if (!sendButton || !modelRoot || !agentRoot || !deepSeekSessionRoot) return;
   const anchor = trailingActionAnchor(sendButton);
   const parent = anchor.parentElement;
   if (!parent || typeof parent.insertBefore !== "function") return;
   if (
     modelRoot.parentElement === parent &&
     agentRoot.parentElement === parent &&
+    deepSeekSessionRoot.parentElement === parent &&
     modelRoot.nextElementSibling === agentRoot &&
-    agentRoot.nextElementSibling === anchor
+    agentRoot.nextElementSibling === deepSeekSessionRoot &&
+    deepSeekSessionRoot.nextElementSibling === anchor
   ) {
     return;
   }
   parent.insertBefore(modelRoot, anchor);
   parent.insertBefore(agentRoot, anchor);
+  parent.insertBefore(deepSeekSessionRoot, anchor);
 }
 
 function refreshUsagePlacement(control: ComposerAgentControl): void {
@@ -607,6 +618,7 @@ export function mountComposerAgentControl(
   onSelectThinking: (thinkingOptionId: string) => void,
   onSelectPermissionMode: (permissionModeId: string) => void,
   onSelectCommand: (command: HarnessCommandDescriptor) => void,
+  getDeepSeekSessionContext: () => RendererDeepSeekSessionContext | null = () => null,
 ): ComposerAgentControl {
   const nativeModelControl = captureNativeControl(nativeModelControlForComposer(composer));
   const nativeContextUsageControl = captureNativeControl(
@@ -632,6 +644,12 @@ export function mountComposerAgentControl(
     trailingActionAnchor(sendButton),
     onSelectCommand,
   );
+  const deepSeekSessions = mountRendererDeepSeekSessionDialog(
+    composerId,
+    toolbar ?? composer,
+    trailingActionAnchor(sendButton),
+    getDeepSeekSessionContext,
+  );
 
   const permissionParent = nativePermissionModeControl?.element.parentElement;
   if (permissionParent && nativePermissionModeControl && nativePermissionModeControlVerified) {
@@ -655,6 +673,7 @@ export function mountComposerAgentControl(
     credits,
     usage: null,
     harnessCommands,
+    deepSeekSessions,
     sendButton,
     sendDisabledBeforeSwitch: null,
   } satisfies ComposerAgentControl;
@@ -734,6 +753,7 @@ export function renderComposerAgentControl(
   );
   if (control.usage) renderRendererUsageControl(control.usage, usage, locale);
   control.harnessCommands.setLocale(locale);
+  control.deepSeekSessions.sync(locale);
   renderRendererCreditsControl(control.credits, accountCredits);
 }
 
@@ -748,6 +768,7 @@ export function disposeComposerAgentControl(control: ComposerAgentControl): void
   control.usage?.dispose();
   control.usage = null;
   control.harnessCommands.dispose();
+  control.deepSeekSessions.dispose();
   control.permissionModePicker.dispose();
   control.modelPicker.dispose();
   control.picker.dispose();

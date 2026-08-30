@@ -32,6 +32,7 @@ import {
 import {
   createRendererRequestRouteResolver,
   rendererRequestTargetsForHost,
+  rendererDraftCwd,
   resolveRendererRequestRoute,
   transitionRendererAdapterStatus,
 } from "../src/versioned-renderer-adapter.js";
@@ -406,6 +407,26 @@ describe("current Codex Renderer Agent adapter", () => {
       false,
     );
     expect(isDraftPrewarmPolicyReady({ state: "ready", clear: vi.fn() })).toBe(false);
+  });
+
+  it("reads only a nonblank cwd from the active draft policy", () => {
+    const policy = {
+      state: "ready" as const,
+      hostId: "remote-ssh-discovered:mac",
+      select: vi.fn(),
+      clear: vi.fn(async () => undefined),
+      currentCwd: () => "/workspace/project",
+    };
+    expect(rendererDraftCwd(policy)).toBe("/workspace/project");
+    expect(rendererDraftCwd({ ...policy, currentCwd: () => "  " })).toBeNull();
+    expect(
+      rendererDraftCwd({
+        ...policy,
+        currentCwd: () => {
+          throw new Error("stale policy");
+        },
+      }),
+    ).toBeNull();
   });
 
   it("uses a draft routing policy only for the active remote Host", () => {

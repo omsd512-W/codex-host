@@ -53,6 +53,7 @@ import {
   type RendererAdapterStatus,
 } from "./versioned-renderer-adapter.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
+import { shouldShowDeepSeekSessionEntry } from "./renderer-deepseek-session-dialog.js";
 import { thinkingOptionsForModel } from "./renderer-model-picker.js";
 import { RENDERER_AGENT_INSTALL_URLS } from "./renderer-agent-picker.js";
 import {
@@ -1911,6 +1912,37 @@ export function installRendererBindingProbe(
         const mounted = mountedByComposer.get(composer);
         if (mounted) void executeCommand(mounted, command);
       },
+      () => {
+        const mounted = mountedByComposer.get(composer);
+        if (!mounted || !composer.isConnected) return null;
+        const current = controller.get(composer);
+        if (!shouldShowDeepSeekSessionEntry({ ...current, target: mounted.modelTarget })) {
+          return null;
+        }
+        const target = mounted.modelTarget;
+        if (!target) return null;
+        const hostId = activeModelHostId();
+        const cwd = modelControl?.currentCwd?.() ?? null;
+        const client = hostId ? modelClientForHost(hostId) : null;
+        return {
+          composer,
+          composerId: current.composerId,
+          target: [...target],
+          hostId,
+          cwd,
+          client,
+          clearPrewarm: clearDraftPrewarm,
+          ready:
+            adapterStatus.state === "ready" &&
+            activeHarnessAvailabilityState().availability["deepseek-harness"] === "ready" &&
+            typeof hostId === "string" &&
+            hostId.length > 0 &&
+            typeof cwd === "string" &&
+            cwd.trim().length > 0 &&
+            typeof client?.listDeepSeekNativeSessionCandidates === "function" &&
+            typeof client.linkDeepSeekNativeSession === "function",
+        };
+      },
     );
     const mounted: MountedComposer = {
       composer,
@@ -2198,6 +2230,7 @@ export function installRendererBindingProbe(
   const onHostRouteChange = (): void => {
     reconcileHarnessAvailabilityHost();
     void refreshHarnessAvailability();
+    for (const mounted of mountedByComposer.values()) renderMounted(mounted);
   };
   const onAdapterStatus = () => {
     publishConnectionStatus();

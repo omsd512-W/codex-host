@@ -89,6 +89,8 @@ function clientWith(
   listThreadOwnership: (input: ThreadOwnershipListParams) => Promise<ThreadOwnershipListResult>,
 ): RendererModelClient {
   return {
+    listDeepSeekNativeSessionCandidates: vi.fn(),
+    linkDeepSeekNativeSession: vi.fn(),
     forkThread: vi.fn(),
     inspectHarness: vi.fn(),
     inspectThread: vi.fn(),

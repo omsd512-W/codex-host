@@ -710,7 +710,7 @@ describe("Renderer Composer DOM behavior", () => {
     expect(trailingActionAnchor(send as unknown as HTMLButtonElement)).toBe(dictation);
   });
 
-  it("re-places model and agent pickers before the voice button", () => {
+  it("re-places the model, agent and existing-Session controls before the voice button", () => {
     const voice = {
       type: "button",
       hasAttribute: () => false,
@@ -734,12 +734,14 @@ describe("Renderer Composer DOM behavior", () => {
     Object.assign(send, { parentElement: toolbar });
     const modelRoot = { parentElement: toolbar, nextElementSibling: send };
     const agentRoot = { parentElement: toolbar, nextElementSibling: send };
+    const deepSeekSessionRoot = { parentElement: toolbar, nextElementSibling: send };
     const control = {
       composer: { querySelectorAll: () => [] },
       sendButton: send,
       root: agentRoot,
       picker: { root: agentRoot },
       modelPicker: { root: modelRoot, trigger: {} },
+      deepSeekSessions: { root: deepSeekSessionRoot },
       nativeModelControl: null,
       nativePermissionModeControl: null,
       credits: {
@@ -758,9 +760,10 @@ describe("Renderer Composer DOM behavior", () => {
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, voice);
     expect(insertBefore).toHaveBeenCalledWith(agentRoot, voice);
+    expect(insertBefore).toHaveBeenCalledWith(deepSeekSessionRoot, voice);
   });
 
-  it("re-places model and agent pickers before the pause button", () => {
+  it("re-places the model, agent and existing-Session controls before the pause button", () => {
     const pause = {
       type: "button",
       hasAttribute: () => false,
@@ -782,12 +785,14 @@ describe("Renderer Composer DOM behavior", () => {
     Object.assign(send, { parentElement: toolbar });
     const modelRoot = { parentElement: toolbar, nextElementSibling: send };
     const agentRoot = { parentElement: toolbar, nextElementSibling: send };
+    const deepSeekSessionRoot = { parentElement: toolbar, nextElementSibling: send };
     const control = {
       composer: { querySelectorAll: () => [] },
       sendButton: send,
       root: agentRoot,
       picker: { root: agentRoot },
       modelPicker: { root: modelRoot, trigger: {} },
+      deepSeekSessions: { root: deepSeekSessionRoot },
       nativeModelControl: null,
       nativePermissionModeControl: null,
       credits: {
@@ -806,6 +811,7 @@ describe("Renderer Composer DOM behavior", () => {
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, pause);
     expect(insertBefore).toHaveBeenCalledWith(agentRoot, pause);
+    expect(insertBefore).toHaveBeenCalledWith(deepSeekSessionRoot, pause);
   });
 
   it("freezes only on a non-composing Enter without Shift", () => {

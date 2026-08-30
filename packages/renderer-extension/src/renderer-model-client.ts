@@ -1,6 +1,10 @@
 import {
   externalThreadForkParamsSchema,
   externalThreadForkResultSchema,
+  deepSeekNativeSessionCandidatesParamsSchema,
+  deepSeekNativeSessionCandidatesResultSchema,
+  deepSeekNativeSessionLinkParamsSchema,
+  deepSeekNativeSessionLinkResultSchema,
   harnessCommandCatalogSchema,
   harnessConfigurationStateSchema,
   harnessInspectParamsSchema,
@@ -25,6 +29,10 @@ import {
   updateStatusResultSchema,
   type ExternalThreadForkParams,
   type ExternalThreadForkResult,
+  type DeepSeekNativeSessionCandidatesParams,
+  type DeepSeekNativeSessionCandidatesResult,
+  type DeepSeekNativeSessionLinkParams,
+  type DeepSeekNativeSessionLinkResult,
   type HarnessCommandCatalog,
   type HarnessConfigurationState,
   type HarnessInspection,
@@ -48,6 +56,9 @@ import {
 } from "@codexhost/shared-contracts";
 
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
+export const DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD =
+  "codexhost/deepseek/native-session/candidates";
+export const DEEPSEEK_NATIVE_SESSION_LINK_METHOD = "codexhost/deepseek/native-session/link";
 export const THREAD_FORK_METHOD = "codexhost/thread/fork";
 export const THREAD_INSPECT_METHOD = "codexhost/thread/inspect";
 export const THREAD_COMMANDS_INSPECT_METHOD = "codexhost/thread/commands/inspect";
@@ -98,7 +109,14 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 
 export interface RendererModelClient {
   currentHostId?(): string | null;
+  currentCwd?(): string | null;
   clientForHost?(hostId: string): RendererModelClient | null;
+  listDeepSeekNativeSessionCandidates(
+    input: DeepSeekNativeSessionCandidatesParams,
+  ): Promise<DeepSeekNativeSessionCandidatesResult>;
+  linkDeepSeekNativeSession(
+    input: DeepSeekNativeSessionLinkParams,
+  ): Promise<DeepSeekNativeSessionLinkResult>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
   inspectHarness(input: HarnessInspectParams): Promise<HarnessInspection>;
   inspectThread(input: ThreadInspectionParams): Promise<ThreadInspection>;
@@ -215,6 +233,20 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
+    async listDeepSeekNativeSessionCandidates(
+      input: DeepSeekNativeSessionCandidatesParams,
+    ): Promise<DeepSeekNativeSessionCandidatesResult> {
+      const params = deepSeekNativeSessionCandidatesParamsSchema.parse(input);
+      const result = await manager.sendRequest(DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD, params);
+      return deepSeekNativeSessionCandidatesResultSchema.parse(result);
+    },
+    async linkDeepSeekNativeSession(
+      input: DeepSeekNativeSessionLinkParams,
+    ): Promise<DeepSeekNativeSessionLinkResult> {
+      const params = deepSeekNativeSessionLinkParamsSchema.parse(input);
+      const result = await manager.sendRequest(DEEPSEEK_NATIVE_SESSION_LINK_METHOD, params);
+      return deepSeekNativeSessionLinkResultSchema.parse(result);
+    },
     async forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult> {
       const params = externalThreadForkParamsSchema.parse(input);
       const result = await manager.sendRequest(THREAD_FORK_METHOD, params);

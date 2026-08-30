@@ -28,6 +28,8 @@ export type {
 } from "./agent-selection-state.js";
 export {
   HARNESS_INSPECT_METHOD,
+  DEEPSEEK_NATIVE_SESSION_CANDIDATES_METHOD,
+  DEEPSEEK_NATIVE_SESSION_LINK_METHOD,
   THREAD_FORK_METHOD,
   THREAD_INSPECT_METHOD,
   THREAD_COMMANDS_INSPECT_METHOD,
@@ -62,6 +64,19 @@ export {
   rendererPermissionModePresentation,
 } from "./renderer-harness-localization.js";
 export type { RendererHarnessMessages } from "./renderer-harness-localization.js";
+export {
+  createRendererDeepSeekSessionDialogController,
+  mountRendererDeepSeekSessionDialog,
+  nextDeepSeekSessionSelection,
+  shouldShowDeepSeekSessionEntry,
+} from "./renderer-deepseek-session-dialog.js";
+export type {
+  RendererDeepSeekSessionContext,
+  RendererDeepSeekSessionDialogControl,
+  RendererDeepSeekSessionDialogController,
+  RendererDeepSeekSessionDialogPhase,
+  RendererDeepSeekSessionDialogView,
+} from "./renderer-deepseek-session-dialog.js";
 export { mountRendererHarnessCommandControl } from "./renderer-harness-command-control.js";
 export type { RendererHarnessCommandControl } from "./renderer-harness-command-control.js";
 export {
@@ -78,6 +93,7 @@ export {
 export {
   inspectRendererForkContract,
   installRendererForkControl,
+  openRendererThread,
   rendererForkTargetFromButton,
 } from "./renderer-fork-control.js";
 export type {
@@ -125,6 +141,7 @@ export {
   modelSelectionForAgent,
   grokTransportModelId,
   piTransportModelId,
+  rendererDraftCwd,
   PI_TRANSPORT_MODEL_ID,
   PI_TRANSPORT_MODEL_PREFIX,
   DEEPSEEK_HARNESS_TRANSPORT_MODEL_ID,

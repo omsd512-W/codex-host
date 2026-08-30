@@ -11,6 +11,24 @@ export interface RendererHarnessMessages {
   readonly loadingPermissions: string;
   readonly selecting: string;
   readonly permissionsUnavailable: string;
+  readonly openExistingSession: string;
+  readonly existingSessionUnavailable: string;
+  readonly existingSessionTitle: string;
+  readonly existingSessionDescription: string;
+  readonly loadingExistingSessions: string;
+  readonly noExistingSessions: string;
+  readonly existingSessionsFailed: string;
+  readonly retry: string;
+  readonly cancel: string;
+  readonly open: string;
+  readonly linkingExistingSession: string;
+  readonly openingExistingSession: string;
+  readonly untitledSession: string;
+  readonly runningSession: string;
+  readonly emptySession: string;
+  readonly sessionId: string;
+  readonly updatedAt: string;
+  readonly workingDirectory: string;
 }
 
 const ENGLISH_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
@@ -22,6 +40,25 @@ const ENGLISH_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
   loadingPermissions: "Loading permissions...",
   selecting: "Selecting...",
   permissionsUnavailable: "Permissions unavailable",
+  openExistingSession: "Open existing session",
+  existingSessionUnavailable: "Existing sessions are unavailable for this draft",
+  existingSessionTitle: "Open an existing DeepSeek Harness session",
+  existingSessionDescription:
+    "Choose an unmapped session from this workspace. Its native data will remain in DeepSeek Harness.",
+  loadingExistingSessions: "Loading sessions...",
+  noExistingSessions: "No unmapped sessions were found in this workspace.",
+  existingSessionsFailed: "Sessions could not be loaded.",
+  retry: "Retry",
+  cancel: "Cancel",
+  open: "Open",
+  linkingExistingSession: "Linking session...",
+  openingExistingSession: "Opening session...",
+  untitledSession: "Untitled session",
+  runningSession: "Running",
+  emptySession: "Empty session",
+  sessionId: "Session ID",
+  updatedAt: "Updated",
+  workingDirectory: "Working directory",
 });
 
 const CHINESE_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
@@ -33,6 +70,25 @@ const CHINESE_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
   loadingPermissions: "正在加载权限...",
   selecting: "正在选择...",
   permissionsUnavailable: "权限不可用",
+  openExistingSession: "打开已有会话",
+  existingSessionUnavailable: "此草稿暂时无法打开已有会话",
+  existingSessionTitle: "打开已有 DeepSeek Harness 会话",
+  existingSessionDescription:
+    "选择当前工作区中尚未关联的会话。原生数据仍由 DeepSeek Harness 管理。",
+  loadingExistingSessions: "正在加载会话...",
+  noExistingSessions: "当前工作区没有尚未关联的会话。",
+  existingSessionsFailed: "无法加载会话。",
+  retry: "重试",
+  cancel: "取消",
+  open: "打开",
+  linkingExistingSession: "正在关联会话...",
+  openingExistingSession: "正在打开会话...",
+  untitledSession: "未命名会话",
+  runningSession: "正在运行",
+  emptySession: "空会话",
+  sessionId: "会话 ID",
+  updatedAt: "更新时间",
+  workingDirectory: "工作目录",
 });
 
 const CHINESE_PERMISSION_MODE_LABELS = new Map<string, string>([

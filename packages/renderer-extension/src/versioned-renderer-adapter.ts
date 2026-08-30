@@ -4,6 +4,8 @@ import {
   harnessThinkingOptionIdSchema,
   hostThreadIdSchema,
   type ExternalThreadForkParams,
+  type DeepSeekNativeSessionCandidatesParams,
+  type DeepSeekNativeSessionLinkParams,
   type HarnessInspectParams,
   type HarnessModelRef,
   type HarnessPermissionModeId,
@@ -108,6 +110,7 @@ export interface RendererDraftPrewarmPolicy {
   state: "ready";
   hostId: string;
   readonly requestTarget?: () => unknown;
+  readonly currentCwd?: () => string | null;
   select(model: string | null): boolean;
   clear(): Promise<void>;
 }
@@ -628,6 +631,17 @@ export function isDraftPrewarmPolicyReady(value: unknown): value is RendererDraf
   );
 }
 
+export function rendererDraftCwd(
+  policy: RendererDraftPrewarmPolicy | null | undefined,
+): string | null {
+  try {
+    const cwd = policy?.currentCwd?.();
+    return typeof cwd === "string" && cwd.trim().length > 0 ? cwd : null;
+  } catch {
+    return null;
+  }
+}
+
 export function activeRendererDraftPrewarmPolicy(
   policy: unknown,
   targets: readonly PrewarmTarget[],
@@ -851,6 +865,7 @@ export function installCurrentRendererAdapter(): {
   };
   const modelControl: RendererModelClient = Object.freeze({
     currentHostId: () => currentRequestRoute()?.policy.hostId ?? null,
+    currentCwd: () => rendererDraftCwd(currentRequestRoute()?.policy),
     clientForHost(hostId: string): RendererModelClient | null {
       const route = currentRequestRoute();
       if (route?.policy.hostId === hostId) return modelClientForTargets(route.targets);
@@ -860,6 +875,10 @@ export function installCurrentRendererAdapter(): {
       return modelClientForTargets(targets ?? []);
     },
     forkThread: (input: ExternalThreadForkParams) => currentModelClient().forkThread(input),
+    listDeepSeekNativeSessionCandidates: (input: DeepSeekNativeSessionCandidatesParams) =>
+      currentModelClient().listDeepSeekNativeSessionCandidates(input),
+    linkDeepSeekNativeSession: (input: DeepSeekNativeSessionLinkParams) =>
+      currentModelClient().linkDeepSeekNativeSession(input),
     inspectHarness: (input: HarnessInspectParams) => currentModelClient().inspectHarness(input),
     inspectThread: (input: ThreadInspectionParams) => currentModelClient().inspectThread(input),
     inspectThreadCommands: (input: ThreadCommandsInspectParams) =>
