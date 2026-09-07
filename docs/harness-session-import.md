@@ -2,13 +2,15 @@
 
 ## 当前范围
 
-设置 → 会话导入可登记 **Pi 原生 v3 Session** 和 **DSH Modern Session**。导入只建立 Host Thread 与原生 Session 的映射，不复制 Transcript、不转换 Harness、不发送用户 Turn；打开后仍通过对应 Adapter 的 `open({ kind: "resume" })` 恢复历史并继续会话。
+设置 → 会话导入可登记 **Pi 原生 v3 Session** 和 **受支持的 DSH Web Remote Session**。导入只建立 Host Thread 与原生 Session 的映射，不复制 Transcript、不转换 Harness、不发送用户 Turn；打开后仍通过对应 Adapter 的 `open({ kind: "resume" })` 恢复历史并继续会话。
 
 - 设置页始终使用本地 Host，即使 Composer 当前连接远程工作区。
 - 可选 Harness 来自该 Host 已加载、同时提供发现和解析能力的 Adapter，不使用 Renderer 内置 Harness 名单。
-- 目录表示“实现了导入接口”，不保证当前原生运行时可用。DSH Legacy、旧 Host、缺失插件或不可用存储会明确失败，不伪装成无候选。
-- DSH 仍保留原先本机、codexhost 管理的 exact `dsh-v0.1.2-rc.1` Modern 限定。
+- 目录表示“实现了导入接口”，不保证当前原生运行时可用。已退役的 `dsh-v0.1.1-rc.2`、缺失插件或不可用存储会明确失败，不伪装成无候选。
+- DSH 仅允许本机、codexhost 管理的 exact `dsh-v0.1.2-rc.1` 和 `dsh-v0.1.3-rc.1`；推荐后者，其他 alpha、RC、正式版或未来版本不会因相邻或表面兼容而自动放行。
 - 本次没有增加远程扫描、CC direct/Broker 导入，也没有完成整个 Agent Picker 的动态插件化。
+
+DSH Adapter 在连接时按检测到的精确版本选择 v012 或 v013 profile，并在该连接生命周期内固定；候选发现、解析和后续 resume 使用同一 profile，不跨版本静默 fallback。v013 profile 当前依据 `dsh-v0.1.3-alpha.2` 提交 `82a5fd61a7cf5c293cec4bdff68f455398d685e9` 实现，尚不构成未来 RC 的协议兼容证明；`dsh-v0.1.3-rc.1` 发布后须复核真实 tag 和编译产物，再完成导入与恢复验证。
 
 ## Adapter 契约与职责
 
@@ -48,7 +50,7 @@ interface HarnessSessionImportSource {
 
 列表默认每页 20 条；页面可选 20 / 50 / 100 条，显示总数和上一页/下一页。搜索按标题、会话 ID、项目路径进行不区分大小写的子串匹配，覆盖所有候选而非仅当前页；提交搜索或切换 Harness/每页数量后回到第一页。Host 先过滤已映射会话、搜索、按活动时间与稳定 ID 排序，再分页；`total` 是过滤后的总数。单次响应最多 1,000 条只是 wire page 保护，不限制存储总量或总候选数。
 
-旧 `codexhost/deepseek/modern-session/list` / `import` 作为兼容别名保留在 Host，复用同一个 DSH importer 和通知去重集合；旧 list 仍返回 `{ candidates }`，不改变原 DSH 协议限定。新 Renderer 只使用公共 RPC。旧 Host 未实现公共入口时显示不可用，不改走未经验证的原生桥接。存储读取失败显示“无法读取本地会话”，不再误报“不支持导入”。
+旧 `codexhost/deepseek/modern-session/list` / `import` 作为兼容别名保留在 Host，复用同一个 DSH importer 和通知去重集合；旧 list 仍返回 `{ candidates }`，不能绕过精确版本和 profile Gate。新 Renderer 只使用公共 RPC。旧 Host 未实现公共入口时显示不可用，不改走未经验证的原生桥接。存储读取失败显示“无法读取本地会话”，不再误报“不支持导入”。
 
 `HarnessSessionImporter` 负责：
 

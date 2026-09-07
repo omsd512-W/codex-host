@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyDeepSeekVersionOutput,
   hasDeepSeekModernAuthenticationFingerprint,
-  parseDeepSeekLegacyEndpoint,
+  parseDeepSeekEndpoint,
   probeDeepSeekExecutableGeneration,
   type DeepSeekGenerationProbeError,
   type DeepSeekGenerationProbeDependencies,
@@ -185,9 +185,9 @@ describe("DeepSeek executable generation probe", () => {
     "http://127.0.0.1:3080/#fragment-canary",
     "http://127.0.0.1:3080/?mode=canary",
     "http://127.0.0.1.example:3080/",
-  ])("rejects a non-exact Legacy probe endpoint %s without echoing it", (endpoint) => {
+  ])("rejects a non-exact probe endpoint %s without echoing it", (endpoint) => {
     try {
-      parseDeepSeekLegacyEndpoint(endpoint);
+      parseDeepSeekEndpoint(endpoint);
       throw new Error("expected endpoint validation to fail");
     } catch (error) {
       expect(error).toMatchObject({ code: "protocolError" });
@@ -196,11 +196,15 @@ describe("DeepSeek executable generation probe", () => {
   });
 
   it.each([
-    ["0.1.1-rc.2", "legacy", "0.1.1-rc.2"],
-    ["0.1.2-rc.1\n", "modern", "0.1.2-rc.1"],
-    ["0.1.2-rc.1\r\n", "modern", "0.1.2-rc.1"],
-  ] as const)("classifies the exact supported output %j", (output, generation, version) => {
-    expect(classifyDeepSeekVersionOutput(output)).toEqual({ generation, version });
+    ["0.1.2-rc.1\n", "0.1.2-rc.1", 0, false],
+    ["0.1.2-rc.1\r\n", "0.1.2-rc.1", 0, false],
+    ["0.1.3-rc.1\n", "0.1.3-rc.1", 2, true],
+  ] as const)("classifies the exact supported output %j", (output, version, format, stream) => {
+    expect(classifyDeepSeekVersionOutput(output)).toMatchObject({
+      generation: "modern",
+      version,
+      profile: { version, sessionFormatVersion: format, assistantStream: stream },
+    });
   });
 
   it.each(["", " 0.1.2-rc.1", "v0.1.2-rc.1", "0.1.2-rc.1\n\n", "version\n"])(
@@ -214,6 +218,7 @@ describe("DeepSeek executable generation probe", () => {
 
   it.each([
     "0.1.0-rc.7",
+    "0.1.1-rc.2",
     "0.1.1-rc.1",
     "0.1.2-alpha.1",
     "0.1.2-alpha.2",
@@ -226,6 +231,8 @@ describe("DeepSeek executable generation probe", () => {
     "0.1.2-rc.99",
     "0.1.2",
     "0.1.3",
+    "0.1.3-alpha.1",
+    "0.1.3-rc.2",
     "0.1.2-alpha.4+build.1",
     "0.1.2-alpha.5+build.1",
     "0.1.2-rc.1+build.1",
@@ -234,11 +241,14 @@ describe("DeepSeek executable generation probe", () => {
       classifyDeepSeekVersionOutput(output);
       throw new Error("expected unsupported version to fail");
     } catch (error) {
-      expect(error).toMatchObject({ code: "unsupported", retryable: false });
-      expect((error as Error).message).toContain("推荐版本 dsh-v0.1.2-rc.1");
-      expect((error as Error).message).toContain(
-        "Please upgrade to the recommended dsh-v0.1.2-rc.1",
-      );
+      expect(error).toMatchObject({
+        code: "unsupported",
+        retryable: false,
+        detectedVersion: output,
+      });
+      expect((error as Error).message).toContain(`当前检测版本：dsh-v${output}`);
+      expect((error as Error).message).toContain("dsh-v0.1.3-rc.1、dsh-v0.1.2-rc.1");
+      expect((error as Error).message).toContain("推荐版本：dsh-v0.1.3-rc.1");
     }
   });
 
@@ -251,9 +261,10 @@ describe("DeepSeek executable generation probe", () => {
     child.stdout.emit("data", Buffer.from("0.1.2-rc.1\n"));
     close(child, 0);
 
-    await expect(pending).resolves.toEqual({
+    await expect(pending).resolves.toMatchObject({
       generation: "modern",
       version: "0.1.2-rc.1",
+      profile: { version: "0.1.2-rc.1" },
       command: { command, arguments: [], kind: "configured" },
     });
     expect(probeDependencies.spawn).toHaveBeenCalledWith(command, ["--version"], {
@@ -371,9 +382,9 @@ describe("DeepSeek executable generation probe", () => {
       },
       probeDependencies,
     );
-    child.stdout.emit("data", "0.1.1-rc.2\n");
+    child.stdout.emit("data", "0.1.2-rc.1\n");
     close(child, 0);
-    await expect(pending).resolves.toMatchObject({ generation: "legacy" });
+    await expect(pending).resolves.toMatchObject({ generation: "modern" });
 
     for (const option of ["timeoutMs", "cleanupTimeoutMs"] as const) {
       const rejectedDependencies = dependencies(childProcess());

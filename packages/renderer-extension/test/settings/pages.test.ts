@@ -300,6 +300,11 @@ describe("Renderer Connections page", () => {
                 agent: "deepseek-harness",
                 availability: "ready",
                 error: null,
+                versionSummary: {
+                  detected: "dsh-v0.1.3-rc.1",
+                  supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.2-rc.1"],
+                  recommended: "dsh-v0.1.3-rc.1",
+                },
                 webUiAvailable: true,
               },
             ],
@@ -342,6 +347,11 @@ describe("Renderer Connections page", () => {
     );
     if (!dshRow) throw new Error("DeepSeek Harness row is not rendered");
     dshRow.dispatch("click", { target: null });
+    expect(visibleText(content)).toContain("检测版本");
+    expect(visibleText(content)).toContain("支持版本");
+    expect(visibleText(content)).toContain("推荐版本");
+    expect(visibleText(content)).toContain("dsh-v0.1.3-rc.1");
+    expect(visibleText(content)).toContain("dsh-v0.1.2-rc.1");
     const open = descendants(content).find(
       ({ dataset }) => dataset.connectionAction === "open-web-ui",
     );
@@ -396,6 +406,11 @@ describe("Renderer Connections page", () => {
                   durationMs: 120,
                   stderrTail: "check ~/.pi/agent/settings.json",
                 },
+                versionSummary: {
+                  detected: "pi-v0.85.0",
+                  supported: ["pi-v0.85.0"],
+                  recommended: "pi-v0.85.0",
+                },
               },
               {
                 agent: "deepseek-harness",
@@ -404,6 +419,11 @@ describe("Renderer Connections page", () => {
                   code: "notInstalled",
                   message: "DSH is not installed",
                   retryable: false,
+                },
+                versionSummary: {
+                  detected: null,
+                  supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.2-rc.1"],
+                  recommended: "dsh-v0.1.3-rc.1",
                 },
               },
             ],
@@ -445,6 +465,7 @@ describe("Renderer Connections page", () => {
     expect(visibleText(content)).toContain("pi exited with code 1");
     expect(visibleText(content)).toContain("~/.pi/agent/settings.json");
     expect(visibleText(content)).toContain("startup");
+    expect(visibleText(content)).toContain("pi-v0.85.0");
     const issueLink = descendants(content).find(
       ({ tagName, href }) =>
         tagName === "a" && href === "https://github.com/BytePioneer-AI/codex-host/issues/new",
@@ -458,6 +479,9 @@ describe("Renderer Connections page", () => {
     await vi.waitFor(() => expect(document.clipboardWriteText).toHaveBeenCalledOnce());
     expect(document.clipboardWriteText).toHaveBeenCalledWith(
       expect.stringContaining("host: local"),
+    );
+    expect(document.clipboardWriteText).toHaveBeenCalledWith(
+      expect.stringContaining("detectedVersion: pi-v0.85.0"),
     );
     await vi.waitFor(() => expect(visibleNotesText(content)).toContain("已复制"));
     const refresh = descendants(content).find(
@@ -480,6 +504,15 @@ describe("Renderer Connections page", () => {
       target: "_blank",
       rel: "noopener noreferrer",
     });
+
+    const dshRow = descendants(content).find(
+      ({ dataset }) => dataset.connectionItem === "deepseek-harness",
+    );
+    if (!dshRow) throw new Error("DeepSeek Harness row is not rendered");
+    dshRow.dispatch("click", { target: null });
+    expect(visibleText(content)).toContain("未能检测");
+    expect(visibleText(content)).toContain("dsh-v0.1.3-rc.1");
+    expect(visibleText(content)).toContain("dsh-v0.1.2-rc.1");
 
     expect(visibleText(content)).toContain("查看错误");
     const remoteTab = descendants(content).find(

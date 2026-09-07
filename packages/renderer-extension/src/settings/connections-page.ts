@@ -1,4 +1,4 @@
-import type { CodexhostError } from "@codexhost/shared-contracts";
+import type { CodexhostError, HarnessVersionSummary } from "@codexhost/shared-contracts";
 
 import {
   getSharedAgentGroupPreferenceStore,
@@ -29,6 +29,7 @@ export interface RendererConnectionAgentSnapshot {
   readonly agent: ExternalRendererAgent;
   readonly availability: RendererAgentAvailability;
   readonly error: CodexhostError | null;
+  readonly versionSummary?: HarnessVersionSummary;
   readonly webUiAvailable?: true;
 }
 
@@ -94,14 +95,22 @@ function connectionStatusTone(
 
 function diagnosticText(
   hostId: string,
-  item: Pick<ConnectionListItem, "name" | "availability" | "error">,
+  item: Pick<ConnectionListItem, "name" | "availability" | "error" | "agentSnapshot">,
 ): string {
   const error = item.error;
+  const version = item.agentSnapshot?.versionSummary;
   return [
     "codexhost connection diagnostics",
     `host: ${hostId}`,
     `agent: ${item.name}`,
     `status: ${item.availability}`,
+    ...(version
+      ? [
+          `detectedVersion: ${version.detected ?? "not detected"}`,
+          `supportedVersions: ${version.supported.join(", ")}`,
+          `recommendedVersion: ${version.recommended}`,
+        ]
+      : []),
     ...(error
       ? [
           `error.code: ${error.code}`,
@@ -125,6 +134,29 @@ function detailLine(document: Document, label: string, value: string): HTMLEleme
   content.textContent = value;
   line.append(name, content);
   return line;
+}
+
+function versionSummaryDetails(
+  document: Document,
+  summary: HarnessVersionSummary,
+  messages: RendererSettingsMessages,
+): HTMLElement {
+  const metadata = document.createElement("div");
+  metadata.className = "settings-connection-error-metadata";
+  metadata.append(
+    detailLine(
+      document,
+      messages.connectionDetectedVersion,
+      summary.detected ?? messages.connectionVersionNotDetected,
+    ),
+    detailLine(
+      document,
+      messages.connectionSupportedVersions,
+      summary.supported.join(messages.locale === "zh-CN" ? "、" : ", "),
+    ),
+    detailLine(document, messages.connectionRecommendedVersion, summary.recommended),
+  );
+  return metadata;
 }
 
 function setCopyButtonLabel(button: HTMLButtonElement, label: string): void {
@@ -400,6 +432,9 @@ function renderConnectionInspector(
   inspector.replaceChildren(createInspectorHeader(document, item, messages));
   const body = document.createElement("div");
   body.className = "settings-connection-inspector__body";
+  if (item.agentSnapshot?.versionSummary) {
+    body.append(versionSummaryDetails(document, item.agentSnapshot.versionSummary, messages));
+  }
 
   if (item.agentSnapshot?.availability === "notInstalled") {
     const callout = document.createElement("div");

@@ -55,12 +55,18 @@ Codex Desktop 协议、官方 app-server、Renderer 兼容绑定仍是 codexhost
 | OMP | 原生 RPC；权限模式、审批与提问、Subagent、后台自主 Turn、跨目录 Fork/Rollback | 权限切换可能重启原生连接；恢复时可能替换不可用 Model，不能复活旧 Thinking |
 | Grok | ACP 加扩展；审批、压缩、Credits、Fork/跨目录 Fork/Rollback | Permission Mode 在 Session 创建时固定，不能通过恢复后的普通配置写入补设 |
 | OpenCode | SDK/Server 事件流；固定 `/compact`、审批、提问、Diff、Fork/Rollback，不支持跨目录 Fork | 原生权限 API 有累加语义，恢复须尊重原生实际状态，不无条件重放旧权限 |
-| DeepSeek Harness | 公共 Adapter 内选择 Legacy/Modern；Modern 有控制状态确认、自主 Turn、导入和托管 Web | 两代协议能力不同；原生状态确认、事件关联、历史与认证须留在插件 |
+| DeepSeek Harness | 公共 Adapter 在 exact `dsh-v0.1.2-rc.1` 与 `dsh-v0.1.3-rc.1` Web Remote profile 中选择一次；两者都有控制状态确认、自主 Turn、导入和托管 Web | 两个 profile 各自拥有版本相关的历史、事件与恢复语义；传输等已证明一致的部分才可共享 |
 | Antigravity | CLI `stream-json`；配置、工具、文件变化投影、Credits；不支持 Fork/Rollback | Adapter 自持历史补充记录及恢复逻辑；不得迁回 Host 或在重构时删除 |
 
 原生会话和恢复适配归插件负责，不意味着所有 Harness 都有可直接读取的完整原生 Transcript。Host 不建立第二份完整正文事实源；插件可以为自身恢复语义维护必要的私有记录。
 
+DeepSeek Harness 的目标支持矩阵固定为 `dsh-v0.1.2-rc.1` 和 `dsh-v0.1.3-rc.1`，推荐后者；`dsh-v0.1.1-rc.2` 只保留版本识别并返回升级提示，不再进入创建、恢复或导入实现。v013 profile 当前依据 `dsh-v0.1.3-alpha.2` 提交 `82a5fd61a7cf5c293cec4bdff68f455398d685e9` 预先实现，这只是 RC 发布准备：`dsh-v0.1.3-rc.1` 发布后必须复核真实 tag、源码和编译产物，并完成实际协议验证后才能把该目标版本视为已验证支持。
+
 ### 2.1 当前已有的良好边界
+
+DSH 的 `src/profiles/v012.ts` 和 `src/profiles/v013.ts` 分别拥有日志头、历史记录、内容块、版本特有事件及 Fork 标记校验；`modern` 只复用 Web 传输、公共事件关联和 Host 投影。v013 包含 alpha2 的独立 Assistant 流、格式 v2、文件块和消息反馈事件。Assistant 暂态输出在可见消息持久化后发布，失败或放弃的尝试不进入不可撤回的 Host 正文；恢复基线和尝试缓冲均受大小限制。断流或流序号缺口最多重开一次 journal，重开时必须验证已提交历史的完整前缀。
+
+连接诊断在成功、缺失安装及失败状态下都携带检测版本、CH 精确支持范围和推荐版本；未得到有效版本时明确显示“未能检测”。这些信息也写入可复制的诊断文本。
 
 - [`HarnessAdapter / HarnessSession`](../packages/harness-adapter/src/text-session.ts)：统一打开、检查、执行、输出、快照与关闭。
 - [`HarnessId`](../packages/shared-contracts/src/ids.ts)：带品牌类型的非空字符串，不是必须逐项扩充的固定枚举。
@@ -96,7 +102,7 @@ Codex Desktop 协议、官方 app-server、Renderer 兼容绑定仍是 codexhost
 
 ### 2.4 可选能力尚未贯通
 
-**Session Import：**本地共享 RPC、Host Importer 和设置页面已通用化，Pi 与 DSH Modern 共用同一路径。Adapter 通过 `listCandidates()` 提供元数据，通过 `resolveCandidate(id)` 重新验证完整原生引用；Host 保留去重、并发、忙碌检查与临时记录清理。远程和 CC Broker 导入尚未扩展，见[当前导入契约](harness-session-import.md)。
+**Session Import：**本地共享 RPC、Host Importer 和设置页面已通用化，Pi 与两个受支持的 DSH Web Remote profile 共用同一路径。Adapter 通过 `listCandidates()` 提供元数据，通过 `resolveCandidate(id)` 重新验证完整原生引用；Host 保留去重、并发、忙碌检查与临时记录清理。远程和 CC Broker 导入尚未扩展，见[当前导入契约](harness-session-import.md)。
 
 **Credits：**Host 通过结构探测读取 `credits()`、`refreshCredits()`，它们不是正式 Adapter 成员。Renderer 还通过 Codex/Grok/Claude 名单决定是否等待 Credits，而 Antigravity 也有对应方法。这是能力提供与消费的双重接线，不等于本轮已证明具体 UI 故障。
 
@@ -357,7 +363,7 @@ Renderer 只从当前目标 Host 获取可序列化插件描述、能力和公�
 
 ### 10.1 原生承载
 
-Claude 直连与 macOS Broker、DeepSeek Legacy/Modern 的选择归对应插件。现有 Claude Broker 可先保留为插件专属承载，不必一次扩大为全 Harness RPC。
+Claude 直连与 macOS Broker、DeepSeek v012/v013 exact profile 的选择归对应插件。DeepSeek 只在连接时选择一次 profile，后续解析和恢复不得跨 profile fallback；已退役的 `dsh-v0.1.1-rc.2` 只返回升级诊断。现有 Claude Broker 可先保留为插件专属承载，不必一次扩大为全 Harness RPC。
 
 Rust 继续拥有原生启动、进程管理、安装与平台集成。若平台设施需要参数化，应使用有限的通用进程/服务描述，而不是让 Rust 理解 Harness 会话或权限语义。
 
@@ -446,7 +452,7 @@ Rust 继续拥有原生启动、进程管理、安装与平台集成。若平台
 - OpenCode 不错误重放权限；原生配置确认失败不发布虚假状态。
 - OMP Model 回退、缺失 Thinking、权限重启失败恢复、Subagent 和后台自主 Turn。
 - Claude 本地与 Broker 模式的现有行为、交互回调及后台延续。
-- DeepSeek Legacy/Modern 分别验证；Modern 状态确认、事件关联、导入竞争与忙碌检查。
+- DeepSeek `dsh-v0.1.2-rc.1` 与 `dsh-v0.1.3-rc.1` profile 分别验证；覆盖状态确认、事件关联、导入竞争与忙碌检查，并验证 `dsh-v0.1.1-rc.2` 只被识别和拒绝。
 - Antigravity 历史补充记录、重启恢复与受支持文件变化展示。
 - 各 Harness 支持的精确 Fork、跨目录限制、Rollback 与稳定 Turn/Checkpoint 身份。
 - Usage/Credits 未知、刷新、失败与 Thread/Host 切换不串用数据。Codex 额度缓存、刷新及失效按 Account 隔离：已有 Thread 使用持久化绑定账号，草稿通过 `codexhost/account/usage/inspect` 按所选 `accountId` 读取；切换账号立即清除旧额度，过期异步响应不得覆盖新选择。未知或不可用账号不回退查询全局默认账号。

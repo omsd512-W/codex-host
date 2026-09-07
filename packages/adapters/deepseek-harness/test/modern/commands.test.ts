@@ -11,6 +11,7 @@ import {
   type ModernRemoteConnectionErrorCode,
 } from "../../src/modern/remote-connection.js";
 import type { ModernRemoteResult } from "../../src/modern/wire.js";
+import { DEEPSEEK_V013_PROFILE } from "../../src/profiles/profile.js";
 
 interface RemoteCall {
   readonly endpoint: string;
@@ -61,6 +62,19 @@ describe("DeepSeek Harness Modern native commands", () => {
         options: { timeoutMs: null },
       },
     ]);
+  });
+
+  it("uses the v0.1.3 submittedAttachments wire parameter", async () => {
+    const signal = new AbortController().signal;
+    const remote = new FakeRemote({ ok: true, value: undefined });
+
+    await executeModernCommand(remote, "session-1", "/compact", signal, DEEPSEEK_V013_PROFILE);
+
+    expect(remote.calls[0]).toMatchObject({
+      endpoint: "commands/execute",
+      args: { agentId: "session-1", line: "/compact", submittedAttachments: [] },
+      signal,
+    });
   });
 
   it("preserves undefined admission misses and strict native error results", async () => {

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   HARNESS_MODEL_REF_MAX_LENGTH,
+  HARNESS_SUPPORTED_VERSION_LIMIT,
   HARNESS_THINKING_OPTION_ID_MAX_LENGTH,
+  HARNESS_VERSION_MAX_LENGTH,
   THREAD_OWNERSHIP_LIST_MAX_LENGTH,
   harnessInspectParamsSchema,
   harnessInspectionSchema,
@@ -73,7 +75,15 @@ describe("Harness Model runtime contracts", () => {
   });
 
   it("accepts a strict browser-safe ready inspection", () => {
-    expect(harnessInspectionSchema.parse(readyInspection())).toEqual(readyInspection());
+    const versionSummary = {
+      detected: "dsh-v0.1.3-rc.1",
+      supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.2-rc.1"],
+      recommended: "dsh-v0.1.3-rc.1",
+    };
+    expect(harnessInspectionSchema.parse({ ...readyInspection(), versionSummary })).toEqual({
+      ...readyInspection(),
+      versionSummary,
+    });
     expect(
       harnessModelSelectionStateSchema.parse({
         effectiveModel: firstRef,
@@ -386,5 +396,51 @@ describe("Harness Model runtime contracts", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps Harness version diagnostics bounded and internally consistent", () => {
+    const failure = {
+      status: "notInstalled",
+      error: { code: "notInstalled", message: "DSH is not installed", retryable: false },
+    } as const;
+    expect(
+      harnessInspectionSchema.parse({
+        ...failure,
+        versionSummary: {
+          detected: null,
+          supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.2-rc.1"],
+          recommended: "dsh-v0.1.3-rc.1",
+        },
+      }),
+    ).toMatchObject({ versionSummary: { detected: null } });
+
+    for (const versionSummary of [
+      { detected: null, supported: [], recommended: "dsh-v0.1.3-rc.1" },
+      {
+        detected: null,
+        supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.3-rc.1"],
+        recommended: "dsh-v0.1.3-rc.1",
+      },
+      {
+        detected: null,
+        supported: ["dsh-v0.1.2-rc.1"],
+        recommended: "dsh-v0.1.3-rc.1",
+      },
+      {
+        detected: "x".repeat(HARNESS_VERSION_MAX_LENGTH + 1),
+        supported: ["dsh-v0.1.3-rc.1"],
+        recommended: "dsh-v0.1.3-rc.1",
+      },
+      {
+        detected: null,
+        supported: Array.from(
+          { length: HARNESS_SUPPORTED_VERSION_LIMIT + 1 },
+          (_, index) => `v${index}`,
+        ),
+        recommended: "v0",
+      },
+    ]) {
+      expect(harnessInspectionSchema.safeParse({ ...failure, versionSummary }).success).toBe(false);
+    }
   });
 });

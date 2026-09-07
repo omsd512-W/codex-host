@@ -11,6 +11,8 @@ import { threadUsageSnapshotSchema } from "./thread-usage.js";
 export const HARNESS_MODEL_REF_MAX_LENGTH = 512;
 export const HARNESS_MODEL_LABEL_MAX_LENGTH = 256;
 export const HARNESS_THINKING_OPTION_ID_MAX_LENGTH = 128;
+export const HARNESS_VERSION_MAX_LENGTH = 128;
+export const HARNESS_SUPPORTED_VERSION_LIMIT = 16;
 export const THREAD_OWNERSHIP_LIST_MAX_LENGTH = 100;
 
 const nonBlankTextSchema = z.string().refine((value) => value.trim().length > 0, {
@@ -221,6 +223,33 @@ export const harnessWebUiCapabilitySchema = z
 
 export type HarnessWebUiCapability = z.infer<typeof harnessWebUiCapabilitySchema>;
 
+const harnessVersionSchema = nonBlankTextSchema.max(HARNESS_VERSION_MAX_LENGTH);
+
+export const harnessVersionSummarySchema = z
+  .strictObject({
+    detected: harnessVersionSchema.nullable(),
+    supported: z.array(harnessVersionSchema).min(1).max(HARNESS_SUPPORTED_VERSION_LIMIT),
+    recommended: harnessVersionSchema,
+  })
+  .superRefine((summary, context) => {
+    if (new Set(summary.supported).size !== summary.supported.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["supported"],
+        message: "Supported Harness versions must be unique",
+      });
+    }
+    if (!summary.supported.includes(summary.recommended)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommended"],
+        message: "Recommended Harness version must be supported",
+      });
+    }
+  });
+
+export type HarnessVersionSummary = z.infer<typeof harnessVersionSummarySchema>;
+
 const readyHarnessInspectionSchema = z
   .object({
     status: z.literal("ready"),
@@ -228,6 +257,7 @@ const readyHarnessInspectionSchema = z
     permissionModes: harnessPermissionModeCatalogSchema.optional(),
     capabilities: harnessSessionCapabilitiesSchema,
     webUi: harnessWebUiCapabilitySchema.optional(),
+    versionSummary: harnessVersionSummarySchema.optional(),
   })
   .strict()
   .superRefine((inspection, context) => {
@@ -247,6 +277,7 @@ const failedHarnessInspectionSchema = z
   .object({
     status: z.enum(["notInstalled", "unavailable", "error"]),
     error: codexhostErrorSchema,
+    versionSummary: harnessVersionSummarySchema.optional(),
   })
   .strict();
 

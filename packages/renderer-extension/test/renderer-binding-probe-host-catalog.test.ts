@@ -277,15 +277,25 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     installFakeBrowser();
     let dshAvailable = true;
     let dshInspections = 0;
+    const versionSummary = {
+      detected: "dsh-v0.1.3-rc.1",
+      supported: ["dsh-v0.1.3-rc.1", "dsh-v0.1.2-rc.1"],
+      recommended: "dsh-v0.1.3-rc.1",
+    };
     const local = {
       inspectHarness: vi.fn(async ({ harnessId }: { harnessId: string }) => {
         if (harnessId !== "deepseek-harness") return readyInspection();
         dshInspections += 1;
         return dshAvailable
-          ? { ...readyInspection("deepseek-model-v1.bW9kZWw"), webUi: { open: true as const } }
+          ? {
+              ...readyInspection("deepseek-model-v1.bW9kZWw"),
+              versionSummary,
+              webUi: { open: true as const },
+            }
           : {
               status: "unavailable" as const,
               error: { code: "processExited", message: "managed DSH exited", retryable: true },
+              versionSummary,
             };
       }),
       openHarnessWebUi: vi.fn(async () => {
@@ -320,6 +330,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         .hosts.find(({ hostId }) => hostId === "local")
         ?.agents.find(({ agent }) => agent === "deepseek-harness");
       expect(dsh?.webUiAvailable).toBe(true);
+      expect(dsh?.versionSummary).toEqual(versionSummary);
     });
     const inspectionsBeforeFailure = dshInspections;
     dshAvailable = false;

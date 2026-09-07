@@ -12,6 +12,7 @@ import {
 } from "../../src/modern/deepseek-harness-adapter.js";
 import { ModernRemoteConnectionError } from "../../src/modern/remote-connection.js";
 import type { ModernRemoteFailure, ModernRemoteResult } from "../../src/modern/wire.js";
+import { DEEPSEEK_V013_PROFILE } from "../../src/profiles/profile.js";
 
 class Feed implements AsyncIterable<unknown>, AsyncIterator<unknown> {
   readonly #items: IteratorResult<unknown>[] = [];
@@ -574,6 +575,120 @@ function setup(
 }
 
 describe("Modern DeepSeek Harness Adapter", () => {
+  it.each(["create", "resume", "fork", "rollbackLastTurn", "rollbackEmpty"] as const)(
+    "uses v013 journals and references for %s",
+    async (operation) => {
+      const { adapter, connection } = setup(["created"], { profile: DEEPSEEK_V013_PROFILE });
+      const cwd = path.resolve("fixture-v013");
+      const locator = { dshVersion: "0.1.3-rc.1" };
+      const sourceRef = nativeSessionRefSchema.parse({
+        ...forkRefs("session-source", 2).sourceRef,
+        locator,
+      });
+      const source =
+        operation === "rollbackEmpty"
+          ? [
+              exactJournalEvent(0, "turn/start", { turn: 1 }),
+              exactJournalEvent(1, "turn/end", { turn: 1, reason: { kind: "completed" } }),
+            ]
+          : [
+              ...forkSourceEvents(),
+              exactJournalEvent(7, "turn/end", { turn: 2, reason: { kind: "completed" } }),
+            ];
+      function seed(
+        sessionId: string,
+        events: readonly Record<string, unknown>[],
+        inherited = false,
+      ): void {
+        const snapshot = exactJournalSnapshot({
+          sessionId,
+          cwd,
+          events,
+          headerAgentPreset: "standard",
+          agentPreset: "standard",
+          ...(inherited ? { parentSession: "session-source" } : {}),
+        });
+        connection.journalSnapshots.set(sessionId, {
+          ...snapshot,
+          header: { ...(snapshot.header as object), version: 2, isSeeded: inherited },
+          assistantStream: { revision: 0 },
+        });
+      }
+      seed("session-source", source);
+      seed("session-created", []);
+      seed(
+        "session-forked",
+        [...source.slice(0, 5), exactJournalEvent(5, "session/end-seed", { inherited: true })],
+        true,
+      );
+      const opened = await adapter.open(
+        operation === "create"
+          ? { kind: "create", cwd }
+          : operation === "resume"
+            ? { kind: "resume", cwd, nativeRef: sourceRef }
+            : operation === "fork"
+              ? {
+                  kind: "fork",
+                  cwd,
+                  sourceRef,
+                  checkpoint: nativeCheckpointRefSchema.parse({
+                    ...forkRefs("session-source", 2).checkpoint,
+                    checkpointId: "v2-turn-end:2",
+                    locator,
+                  }),
+                }
+              : { kind: "rollbackLastTurn", cwd, sourceRef },
+      );
+      expect(opened.ok, JSON.stringify(opened.ok ? null : opened.error)).toBe(true);
+      if (opened.ok) {
+        expect(opened.value.initialState.nativeRef).toMatchObject({ locator });
+        const snapshot = await opened.value.readSnapshot();
+        expect(snapshot.ok).toBe(true);
+        if (snapshot.ok) {
+          expect(snapshot.value.turns).toHaveLength(
+            operation === "resume"
+              ? 2
+              : operation === "create" || operation === "rollbackEmpty"
+                ? 0
+                : 1,
+          );
+          for (const turn of snapshot.value.turns)
+            expect(turn.checkpoint).toMatchObject({
+              checkpointId: expect.stringMatching(/^v2-turn-end:/),
+              locator,
+            });
+        }
+        await opened.value.close();
+      }
+      const follows = connection.streams.filter(({ endpoint }) => endpoint === "session/follow");
+      expect(follows.length).toBeGreaterThan(0);
+      for (const follow of follows)
+        expect(follow.args).toMatchObject({ request: { assistantStream: true } });
+      if (operation === "fork" || operation === "rollbackLastTurn") {
+        expect(connection.calls.filter(({ endpoint }) => endpoint === "session/fork")).toEqual([
+          {
+            endpoint: "session/fork",
+            args: { request: { sessionId: "session-source", atSeq: 2 } },
+          },
+        ]);
+      }
+      await adapter.close();
+    },
+  );
+
+  it("rejects a v013 Session on v012 before any connection side effect", async () => {
+    const { adapter, connection } = setup();
+    const nativeRef = nativeSessionRefSchema.parse({
+      ...forkRefs("session-v013", 1).sourceRef,
+      locator: { dshVersion: "0.1.3-rc.1" },
+    });
+    await expect(
+      adapter.open({ kind: "resume", cwd: path.resolve("fixture-v012"), nativeRef }),
+    ).resolves.toMatchObject({ ok: false, error: { code: "invalidRequest" } });
+    expect(connection.connectCalls).toBe(0);
+    await adapter.close();
+  });
+
   it("lists exact Modern Session candidates through the managed connection", async () => {
     const { adapter, connection } = setup();
     const sessionCwd = path.resolve("fixture-session-import");
