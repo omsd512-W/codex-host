@@ -45,6 +45,17 @@ import {
   structuredDiffs,
 } from "../projection.js";
 import type { ModernJournalEvent } from "./journal.js";
+import {
+  DEEPSEEK_V012_PROFILE,
+  DEEPSEEK_V013_PROFILE,
+  isDeepSeekV013,
+  type DeepSeekModernProfile,
+} from "./profile.js";
+import {
+  DeepSeekV013ProtocolError,
+  expandV013AssistantStream,
+  type DeepSeekV013TimedChunk,
+} from "./v013.js";
 import { redactModernCredential } from "./wire.js";
 
 export const MODERN_HISTORY_MAX_EVENTS = 1_000_000;
@@ -58,6 +69,7 @@ const KNOWN_EVENT_TYPES = new Set([
   "approval/asked",
   "approval/decided",
   "approval/policy",
+  "assistant/attempt",
   "assistant/chunk",
   "assistant/message",
   "command/done",
@@ -135,6 +147,7 @@ interface ValidatorTrace {
 /** Incremental validator shared by the initial history projector and live Session pump. */
 export class ModernEventValidator {
   readonly #maxEvents: number;
+  readonly #profile: DeepSeekModernProfile;
   readonly #trace: ValidatorTrace = {
     count: 0,
     openTurn: null,
@@ -147,8 +160,12 @@ export class ModernEventValidator {
     commandEventSeqs: new Set(),
   };
 
-  constructor(maxEvents = MODERN_HISTORY_MAX_EVENTS) {
+  constructor(
+    maxEvents = MODERN_HISTORY_MAX_EVENTS,
+    profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+  ) {
     this.#maxEvents = boundedInteger(maxEvents, "maxEvents", 1);
+    this.#profile = profile;
   }
 
   accept(event: ModernJournalEvent): void {
@@ -168,7 +185,20 @@ export class ModernEventValidator {
       if (event.ignorable === true) return;
       fail("Modern history contains an unknown required event");
     }
+    if (
+      (isDeepSeekV013(this.#profile) && event.type === "assistant/chunk") ||
+      (!isDeepSeekV013(this.#profile) && event.type === "assistant/attempt")
+    ) {
+      fail("Modern history contains an event from another DSH profile");
+    }
     if (!isRecord(event.data)) fail("Modern history contains malformed known event data");
+    if (
+      isDeepSeekV013(this.#profile) &&
+      event.type === "assistant/message" &&
+      event.sourceEventSeqs !== undefined
+    ) {
+      fail("DSH v0.1.3 assistant/message cannot carry sourceEventSeqs");
+    }
     acceptSurfaceEvent(trace, event);
 
     const data = event.data;
@@ -212,20 +242,35 @@ export class ModernEventValidator {
         return;
       }
       case "user/message":
-        validateUserMessage(data);
+        validateUserMessage(data, this.#profile);
         return;
       case "assistant/chunk":
         exactKeys(data, ["turn", "step", "chunk"]);
         requireOpenStep(trace, data, "assistant/chunk");
-        validateChunk(data.chunk);
+        validateModernChunk(data.chunk);
         return;
-      case "assistant/message":
-        requiredOptionalKeys(data, ["turn", "step", "message"], ["usage", "interrupted"]);
+      case "assistant/message": {
+        if (isDeepSeekV013(this.#profile)) {
+          requiredOptionalKeys(
+            data,
+            ["turn", "step", "message", "stream"],
+            ["usage", "interrupted"],
+          );
+          validateV013Stream(data.stream);
+        } else {
+          requiredOptionalKeys(data, ["turn", "step", "message"], ["usage", "interrupted"]);
+        }
         requireOpenStep(trace, data, "assistant/message");
-        validateAssistantMessage(data.message);
+        validateAssistantMessage(data.message, this.#profile);
         if (data.interrupted !== undefined && data.interrupted !== true) {
           fail("Modern history assistant/message has invalid interrupted marker");
         }
+        return;
+      }
+      case "assistant/attempt":
+        exactKeys(data, ["turn", "step", "stream"]);
+        requireOpenStep(trace, data, "assistant/attempt");
+        validateV013Stream(data.stream);
         return;
       case "tool/call": {
         exactKeys(data, ["turn", "step", "callId", "name", "arguments"]);
@@ -240,7 +285,7 @@ export class ModernEventValidator {
       }
       case "tool/result": {
         requiredOptionalKeys(data, ["turn", "step", "message"], ["error", "meta"]);
-        const callId = validateToolResultMessage(data.message);
+        const callId = validateToolResultMessage(data.message, this.#profile);
         if (data.error !== undefined) validateToolError(data.error);
         if (event.surfaceOp === "append") {
           requireOpenStep(trace, data, "tool/result");
@@ -264,14 +309,23 @@ export class ModernEventValidator {
         validateModelSelection(data);
         return;
       case "session/end-seed":
-        exactKeys(data, []);
+        if (isDeepSeekV013(this.#profile)) {
+          if (Object.hasOwn(data, "inherited")) {
+            exactKeys(data, ["inherited"]);
+            if (data.inherited !== true) fail("DSH v0.1.3 inherited marker is malformed");
+          } else {
+            exactKeys(data, []);
+          }
+        } else {
+          exactKeys(data, []);
+        }
         return;
       case "agent-preset/selected":
         exactKeys(data, ["agentPreset"]);
         requiredString(data.agentPreset, "agent-preset/selected agentPreset");
         return;
       case "agent/inbox/spliced":
-        validateInboxSplice(data);
+        validateInboxSplice(data, this.#profile);
         return;
       case "approval/asked":
         validateApprovalAsked(data);
@@ -356,7 +410,7 @@ export class ModernEventValidator {
         return;
       case "tool/code-dispatch-start":
       case "tool/code-dispatch":
-        validateCodeDispatch(event.type, data);
+        validateCodeDispatch(event.type, data, this.#profile);
         return;
       case "compaction/start":
       case "compaction/summary":
@@ -375,7 +429,17 @@ export class ModernEventValidator {
         validateScheduleChange(data);
         return;
       case "session-log-deepseek/delivery-accepted":
-        exactKeys(data, ["sessionId", "throughSeq"]);
+        if (isDeepSeekV013(this.#profile)) {
+          requiredOptionalKeys(data, ["sessionId", "throughSeq"], ["sessionFormatVersion"]);
+          if (
+            data.sessionFormatVersion !== undefined &&
+            !nonNegativeSafeInteger(data.sessionFormatVersion)
+          ) {
+            fail("delivery-accepted sessionFormatVersion is malformed");
+          }
+        } else {
+          exactKeys(data, ["sessionId", "throughSeq"]);
+        }
         requiredString(data.sessionId, "delivery-accepted sessionId");
         nonNegativeInteger(data.throughSeq, "delivery-accepted throughSeq");
         return;
@@ -497,8 +561,14 @@ export interface ModernForkBoundary {
   readonly events: readonly ModernJournalEvent[];
 }
 
-export function parseModernCheckpointSeq(checkpointId: string): number | null {
-  const match = /^turn-end:(0|[1-9]\d*)$/u.exec(checkpointId);
+export function parseModernCheckpointSeq(
+  checkpointId: string,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): number | null {
+  const pattern = isDeepSeekV013(profile)
+    ? /^v2-turn-end:(0|[1-9]\d*)$/u
+    : /^turn-end:(0|[1-9]\d*)$/u;
+  const match = pattern.exec(checkpointId);
   if (!match) return null;
   const seq = Number(match[1]);
   return Number.isSafeInteger(seq) ? seq : null;
@@ -508,8 +578,9 @@ export function parseModernCheckpointSeq(checkpointId: string): number | null {
 export function resolveModernForkBoundary(
   events: readonly ModernJournalEvent[],
   checkpointId: string,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
 ): ModernForkBoundary | null {
-  const atSeq = parseModernCheckpointSeq(checkpointId);
+  const atSeq = parseModernCheckpointSeq(checkpointId, profile);
   if (atSeq === null || events[atSeq]?.seq !== atSeq || events[atSeq]?.type !== "turn/end") {
     return null;
   }
@@ -522,11 +593,28 @@ export function resolveModernForkBoundary(
 export function matchesModernForkHistory(
   expectedPrefix: readonly ModernJournalEvent[],
   childEvents: readonly ModernJournalEvent[],
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
 ): boolean {
   if (!expectedPrefix.every((event, index) => isDeepStrictEqual(event, childEvents[index]))) {
     return false;
   }
   const childOwned = [...childEvents.slice(expectedPrefix.length)];
+  if (isDeepSeekV013(profile)) {
+    const marker = childOwned.shift();
+    if (
+      marker?.type !== "session/end-seed" ||
+      marker.seq !== expectedPrefix.length ||
+      !isDeepStrictEqual(marker.data, { inherited: true }) ||
+      marker.ignorable !== undefined ||
+      marker.sourceEventSeqs !== undefined ||
+      marker.surfaceOp !== undefined
+    ) {
+      return false;
+    }
+    return childOwned.every(
+      (event) => event.type !== "turn/start" && event.type !== "session/end-seed",
+    );
+  }
   if (expectedPrefix.at(-1)?.type !== "session/end-seed") {
     const marker = childOwned.shift();
     if (
@@ -568,18 +656,20 @@ export interface ProjectModernHistoryInput {
   readonly fallbackThinkingOptionId?: HarnessThinkingOptionId;
   readonly toolOutputLimit?: number;
   readonly maxEvents?: number;
+  readonly profile?: DeepSeekModernProfile;
 }
 
 /** Strictly validate and project one complete authoritative Modern journal prefix. */
 export function projectModernHistory(input: ProjectModernHistoryInput): ModernHistoryProjection {
   if (!nonBlankString(input.sessionId)) throw new TypeError("sessionId must be a non-empty string");
   const harnessId = input.harnessId ?? DEEPSEEK_HARNESS_ID;
+  const profile = input.profile ?? DEEPSEEK_V012_PROFILE;
   const toolOutputLimit = boundedInteger(
     input.toolOutputLimit ?? MODERN_TOOL_OUTPUT_LIMIT,
     "toolOutputLimit",
     0,
   );
-  const validator = new ModernEventValidator(input.maxEvents);
+  const validator = new ModernEventValidator(input.maxEvents, profile);
   const turns: HostTurnSnapshot[] = [];
   let active: HistoryTurn | null = null;
   let effectiveModel = input.fallbackModel;
@@ -598,6 +688,12 @@ export function projectModernHistory(input: ProjectModernHistoryInput): ModernHi
   const recordUsage = (data: Record<string, unknown>, raw: unknown, fallback: string): void => {
     if (!validUsage(raw) || !parseDeepSeekUsage(raw, contextWindowTokens)) return;
     rawUsageByStep.set(deepSeekUsageKey(data, fallback), raw);
+    rebuildUsage();
+  };
+  const recordV013SettlementUsage = (data: Record<string, unknown>, eventSeq: number): void => {
+    const raw = data.usage ?? lastStreamUsage(data.stream);
+    if (!validUsage(raw) || !parseDeepSeekUsage(raw, contextWindowTokens)) return;
+    rawUsageByStep.set(`settlement:${eventSeq}`, raw);
     rebuildUsage();
   };
 
@@ -649,8 +745,13 @@ export function projectModernHistory(input: ProjectModernHistoryInput): ModernHi
           recordUsage(data, data.chunk.usage, `event:${event.seq}`);
         }
         break;
+      case "assistant/attempt":
+        recordV013SettlementUsage(data, event.seq);
+        break;
       case "assistant/message":
-        if (event.surfaceOp === "append" && data.usage !== undefined) {
+        if (isDeepSeekV013(profile) && event.surfaceOp === "append") {
+          recordV013SettlementUsage(data, event.seq);
+        } else if (event.surfaceOp === "append" && data.usage !== undefined) {
           recordUsage(data, data.usage, `event:${event.seq}`);
         }
         if (active && event.surfaceOp === "append") {
@@ -671,7 +772,7 @@ export function projectModernHistory(input: ProjectModernHistoryInput): ModernHi
           finishIncompleteTools(active, itemOutcome(terminal.outcome));
           turns.push({
             nativeTurnRef: modernNativeTurnRef(harnessId, input.sessionId, active.turn),
-            checkpoint: modernCheckpointRef(harnessId, input.sessionId, event.seq),
+            checkpoint: modernCheckpointRef(harnessId, input.sessionId, event.seq, profile),
             input: active.input,
             items: active.items,
             outcome: terminal.history,
@@ -689,6 +790,7 @@ export function projectModernHistory(input: ProjectModernHistoryInput): ModernHi
     harnessId,
     nativeSessionId: input.sessionId,
     formatVersion: 1,
+    ...(isDeepSeekV013(profile) ? { locator: { dshVersion: profile.version } } : {}),
   });
   const state: HarnessSessionState = {
     nativeRef,
@@ -726,12 +828,14 @@ export function modernCheckpointRef(
   harnessId: HarnessId,
   sessionId: string,
   seq: number,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
 ): NativeCheckpointRef {
   return nativeCheckpointRefSchema.parse({
     harnessId,
     nativeSessionId: sessionId,
-    checkpointId: `turn-end:${seq}`,
+    checkpointId: `${isDeepSeekV013(profile) ? "v2-" : ""}turn-end:${seq}`,
     formatVersion: 1,
+    ...(isDeepSeekV013(profile) ? { locator: { dshVersion: profile.version } } : {}),
   });
 }
 
@@ -936,11 +1040,14 @@ function stepPosition(
   };
 }
 
-function validateUserMessage(data: Record<string, unknown>): void {
+function validateUserMessage(
+  data: Record<string, unknown>,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): void {
   exactKeys(data, ["id", "role", "content", "source"]);
   requiredString(data.id, "user/message id");
   if (data.role !== "user") fail("Modern history user/message has an invalid role");
-  validateContent(data.content);
+  validateContent(data.content, profile);
   if (!isRecord(data.source) || !requiredString(data.source.kind, "user/message source kind")) {
     fail("Modern history user/message has an invalid source");
   }
@@ -949,12 +1056,15 @@ function validateUserMessage(data: Record<string, unknown>): void {
   }
 }
 
-function validateAssistantMessage(value: unknown): void {
+function validateAssistantMessage(
+  value: unknown,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): void {
   if (!isRecord(value)) fail("Modern history assistant/message is malformed");
   exactKeys(value, ["id", "role", "content", "source"]);
   requiredString(value.id, "assistant/message id");
   if (value.role !== "assistant") fail("Modern history assistant/message has an invalid role");
-  validateContent(value.content);
+  validateContent(value.content, profile);
   if (
     !isRecord(value.source) ||
     value.source.kind !== "model" ||
@@ -965,7 +1075,10 @@ function validateAssistantMessage(value: unknown): void {
   }
 }
 
-function validateToolResultMessage(value: unknown): string {
+function validateToolResultMessage(
+  value: unknown,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): string {
   if (!isRecord(value)) fail("Modern history tool/result message is malformed");
   exactKeys(value, ["id", "role", "content", "source"]);
   requiredString(value.id, "tool/result message id");
@@ -985,14 +1098,17 @@ function validateToolResultMessage(value: unknown): string {
   ) {
     fail("Modern history tool/result block is malformed");
   }
-  validateContent(block.content);
+  validateContent(block.content, profile);
   if (block.isError !== undefined && typeof block.isError !== "boolean") {
     fail("Modern history tool/result block has invalid isError");
   }
   return callId;
 }
 
-function validateContent(value: unknown): void {
+function validateContent(
+  value: unknown,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): void {
   if (!Array.isArray(value)) fail("Modern history message content must be an array");
   for (const block of value) {
     if (!isRecord(block) || typeof block.type !== "string") {
@@ -1008,6 +1124,17 @@ function validateContent(value: unknown): void {
         exactKeys(block, ["type", "attachment"]);
         if (!isRecord(block.attachment)) fail("Modern history image content is malformed");
         break;
+      case "file":
+        if (!isDeepSeekV013(profile)) {
+          fail("Modern history contains a file block from another DSH profile");
+        }
+        exactKeys(block, ["type", "attachment"]);
+        if (!isRecord(block.attachment)) fail("Modern history file content is malformed");
+        exactKeys(block.attachment, ["attachmentId", "name", "bytes"]);
+        requiredString(block.attachment.attachmentId, "file attachmentId");
+        requiredString(block.attachment.name, "file name");
+        nonNegativeInteger(block.attachment.bytes, "file bytes");
+        break;
       case "tool-call":
         exactKeys(block, ["type", "id", "name", "arguments"]);
         requiredString(block.id, "tool-call content id");
@@ -1021,7 +1148,30 @@ function validateContent(value: unknown): void {
   }
 }
 
-function validateChunk(value: unknown): void {
+function validateV013Stream(value: unknown): readonly DeepSeekV013TimedChunk[] {
+  try {
+    const chunks = expandV013AssistantStream(value);
+    for (const { chunk } of chunks) validateModernChunk(chunk, DEEPSEEK_V013_PROFILE);
+    return chunks;
+  } catch (error) {
+    if (error instanceof ModernHistoryError) throw error;
+    if (error instanceof DeepSeekV013ProtocolError) fail(error.message);
+    throw error;
+  }
+}
+
+function lastStreamUsage(value: unknown): unknown {
+  let usage: unknown;
+  for (const { chunk } of validateV013Stream(value)) {
+    if (chunk.type === "usage") usage = chunk.usage;
+  }
+  return usage;
+}
+
+export function validateModernChunk(
+  value: unknown,
+  profile: DeepSeekModernProfile = DEEPSEEK_V012_PROFILE,
+): void {
   if (!isRecord(value) || typeof value.type !== "string") {
     fail("Modern history assistant/chunk is malformed");
   }
@@ -1049,7 +1199,7 @@ function validateChunk(value: unknown): void {
     case "block-end":
       exactKeys(value, ["type", "index", "block"]);
       nonNegativeInteger(value.index, "block-end index");
-      validateContent([value.block]);
+      validateContent([value.block], profile);
       return;
     case "usage":
       exactKeys(value, ["type", "usage"]);
@@ -1198,7 +1348,7 @@ function validateToolError(value: unknown): void {
   requiredString(value.code, "tool/result error code");
 }
 
-function validateInboxSplice(data: Record<string, unknown>): void {
+function validateInboxSplice(data: Record<string, unknown>, profile: DeepSeekModernProfile): void {
   requiredOptionalKeys(data, ["target", "start", "inserted"], ["removedCount", "outcome"]);
   enumValue(data.target, ["next-turn", "next-step"], "agent/inbox target");
   nonNegativeInteger(data.start, "agent/inbox start");
@@ -1208,7 +1358,7 @@ function validateInboxSplice(data: Record<string, unknown>): void {
   if (!Array.isArray(data.inserted)) fail("Modern history agent/inbox inserted is malformed");
   for (const message of data.inserted) {
     if (!isRecord(message)) fail("Modern history agent/inbox message is malformed");
-    validateUserMessage(message);
+    validateUserMessage(message, profile);
   }
   if (data.outcome !== undefined && data.outcome !== "canceled") {
     fail("Modern history agent/inbox outcome is malformed");
@@ -1428,7 +1578,11 @@ function validateWorkflow(type: string, data: Record<string, unknown>): void {
   enumValue(data.stopReason, ["completed", "cancelled", "error"], "workflow stopReason");
 }
 
-function validateCodeDispatch(type: string, data: Record<string, unknown>): void {
+function validateCodeDispatch(
+  type: string,
+  data: Record<string, unknown>,
+  profile: DeepSeekModernProfile,
+): void {
   const required = ["rootCallId", "parentCallId", "subCallId", "name", "arguments"];
   if (type === "tool/code-dispatch") required.push("isError", "content");
   exactKeys(data, required);
@@ -1439,7 +1593,7 @@ function validateCodeDispatch(type: string, data: Record<string, unknown>): void
     if (typeof data.isError !== "boolean" || !Array.isArray(data.content)) {
       fail("Modern history tool/code-dispatch result is malformed");
     }
-    validateContent(data.content);
+    validateContent(data.content, profile);
   }
 }
 

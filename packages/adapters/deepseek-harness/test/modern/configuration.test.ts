@@ -24,6 +24,7 @@ import {
   type ModernProjectionRow,
 } from "../../src/modern/control-store.js";
 import { ModernRemoteConnectionError } from "../../src/modern/remote-connection.js";
+import { DEEPSEEK_V013_PROFILE } from "../../src/modern/profile.js";
 import type { ModernRemoteResult } from "../../src/modern/wire.js";
 
 const SESSION_ID = "session-1";
@@ -554,6 +555,34 @@ describe("DeepSeek Harness Modern Permission selection", () => {
         images: [],
       },
       options: { timeoutMs: null },
+    });
+  });
+
+  it("uses the v0.1.3 attachment parameter for Permission selection", async () => {
+    const control = initialControl();
+    const remote = new FakeRemote(async () => ({
+      ok: true,
+      value: { commandId: "command-1", result: { kind: "success" } },
+    }));
+    const selecting = selectModernPermissionMode(
+      remote,
+      control,
+      SESSION_ID,
+      permissionCatalog(),
+      "danger-full-access" as never,
+      new AbortController().signal,
+      DEEPSEEK_V013_PROFILE,
+    );
+    await vi.waitFor(() => expect(control.waitCalls).toHaveLength(1));
+    control.set(MODERN_PERMISSION_PROJECTION_KEY, permissionValue("danger-full-access"), 5);
+
+    await expect(selecting).resolves.toMatchObject({ changed: true });
+    expect(remote.calls[0]).toMatchObject({
+      args: {
+        agentId: SESSION_ID,
+        line: "/permission danger-full-access",
+        submittedAttachments: [],
+      },
     });
   });
 

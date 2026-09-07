@@ -9,6 +9,7 @@ import {
   type HarnessPermissionModeId,
   type HarnessPermissionModeScope,
   type HarnessThinkingOptionId,
+  type HarnessVersionSummary,
   type AccountCreditsSnapshot,
   type ThreadInspection,
   type ThreadUsageInspection,
@@ -107,6 +108,9 @@ const externalAgents: readonly ExternalRendererAgent[] = [
 type HarnessAvailability = Partial<Record<ExternalRendererAgent, RendererAgentAvailability>>;
 type HarnessAvailabilityErrors = Record<ExternalRendererAgent, CodexhostError | undefined>;
 type HarnessWebUiAvailability = Record<ExternalRendererAgent, boolean>;
+type HarnessVersionSummaries = Partial<
+  Record<ExternalRendererAgent, HarnessVersionSummary | undefined>
+>;
 
 function isRetryableHarnessAvailability(
   availability: RendererAgentAvailability | undefined,
@@ -160,6 +164,7 @@ interface HostHarnessAvailabilityState {
   availability: HarnessAvailability;
   errors: HarnessAvailabilityErrors;
   webUi: HarnessWebUiAvailability;
+  versionSummaries: HarnessVersionSummaries;
   requestGeneration: number;
   request: { client: RendererModelClient; promise: Promise<void> } | null;
   retryTimer: number | null;
@@ -685,6 +690,7 @@ export function installRendererBindingProbe(
     webUi: Object.fromEntries(
       externalAgents.map((agent) => [agent, false]),
     ) as HarnessWebUiAvailability,
+    versionSummaries: {},
     requestGeneration: 0,
     request: null,
     retryTimer: null,
@@ -2034,12 +2040,14 @@ export function installRendererBindingProbe(
           let status: RendererAgentAvailability = "error";
           let nextError: CodexhostError | undefined;
           let webUiAvailable = false;
+          let versionSummary: HarnessVersionSummary | undefined;
           try {
             const inspection = await client.inspectHarness({
               harnessId: externalHarnessIds[agent],
               refresh,
             });
             status = inspection.status === "ready" ? "ready" : inspection.status;
+            versionSummary = inspection.versionSummary;
             webUiAvailable =
               hostId === "local" &&
               inspection.status === "ready" &&
@@ -2070,6 +2078,7 @@ export function installRendererBindingProbe(
           state.errors[agent] = nextError;
           state.availability = { ...state.availability, [agent]: status };
           state.webUi = { ...state.webUi, [agent]: webUiAvailable };
+          state.versionSummaries[agent] = versionSummary;
           if (hostId !== activeAvailabilityHostId) {
             publishConnectionStatus();
             return;
@@ -2200,6 +2209,9 @@ export function installRendererBindingProbe(
               agent,
               availability: state.availability[agent] ?? "checking",
               error: state.errors[agent] ?? null,
+              ...(state.versionSummaries[agent]
+                ? { versionSummary: state.versionSummaries[agent] }
+                : {}),
               ...(state.webUi[agent] ? { webUiAvailable: true as const } : {}),
             })),
           };

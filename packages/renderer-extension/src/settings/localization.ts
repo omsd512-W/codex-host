@@ -135,6 +135,10 @@ export interface RendererSettingsMessages {
   readonly connectionFailureStage: string;
   readonly connectionDuration: string;
   readonly connectionDiagnostic: string;
+  readonly connectionDetectedVersion: string;
+  readonly connectionSupportedVersions: string;
+  readonly connectionRecommendedVersion: string;
+  readonly connectionVersionNotDetected: string;
   readonly connectionNoRuntime: string;
   readonly connectionStatusReady: string;
   readonly connectionStatusChecking: string;
@@ -340,6 +344,10 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   connectionFailureStage: "Failure stage",
   connectionDuration: "Duration",
   connectionDiagnostic: "Diagnostic",
+  connectionDetectedVersion: "Detected version",
+  connectionSupportedVersions: "Supported versions",
+  connectionRecommendedVersion: "Recommended version",
+  connectionVersionNotDetected: "Not detected",
   connectionNoRuntime: "The renderer request bridge is not available yet.",
   connectionStatusReady: "Ready",
   connectionStatusChecking: "Checking",
@@ -556,6 +564,10 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   connectionFailureStage: "失败阶段",
   connectionDuration: "检查耗时",
   connectionDiagnostic: "诊断信息",
+  connectionDetectedVersion: "检测版本",
+  connectionSupportedVersions: "支持版本",
+  connectionRecommendedVersion: "推荐版本",
+  connectionVersionNotDetected: "未能检测",
   connectionNoRuntime: "Renderer 请求桥尚未可用。",
   connectionStatusReady: "正常",
   connectionStatusChecking: "检查中",

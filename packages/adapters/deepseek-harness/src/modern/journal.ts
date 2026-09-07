@@ -1,6 +1,19 @@
 /** Strict, single-generation DeepSeek Harness Modern Session journal reader. */
 
 import { ModernRemoteConnectionError } from "./remote-connection.js";
+import { DEEPSEEK_V012_PROFILE, isDeepSeekV013, type DeepSeekModernProfile } from "./profile.js";
+import {
+  DeepSeekV013ProtocolError,
+  expandV013AssistantStream,
+  parseV013HistoryRecord,
+  parseV013AssistantBaseline,
+  parseV013JournalHeader,
+  parseV013LiveItem,
+  v013InheritedEventCount,
+  V013_JOURNAL_SNAPSHOT_KEYS,
+  type DeepSeekV013AssistantBaseline,
+  type DeepSeekV013AssistantFrame,
+} from "./v013.js";
 import {
   redactModernCredential,
   sanitizeModernRemoteFailure,
@@ -27,16 +40,24 @@ export type ModernJournalJson =
   | { readonly [key: string]: ModernJournalJson };
 
 export interface ModernJournalHeader {
-  readonly version: 0;
+  readonly version: 0 | 2;
   readonly id: string;
   readonly createdAt: number;
   readonly cwd?: string;
   readonly parentSession?: string;
   readonly seedLength?: number;
+  readonly isSeeded?: boolean;
   readonly origin?: "subagent";
   readonly delegationDepth?: number;
   readonly agentPreset?: string;
 }
+
+export interface ModernJournalAssistantStream {
+  readonly type: "assistant-stream";
+  readonly frame: DeepSeekV013AssistantFrame;
+}
+
+export type ModernJournalLiveItem = ModernJournalEvent | ModernJournalAssistantStream;
 
 export type ModernJournalSurfaceOp =
   "append" | { readonly op: "replace"; readonly start: number; readonly end: number };
@@ -58,11 +79,13 @@ export interface ModernJournalProjections {
 }
 
 export interface ModernJournal {
+  readonly profile?: DeepSeekModernProfile;
   readonly header: ModernJournalHeader;
+  readonly inheritedEventCount?: number;
   readonly cursor: number;
   readonly projections: ModernJournalProjections;
   readonly events: readonly ModernJournalEvent[];
-  readonly live: AsyncIterable<ModernJournalEvent>;
+  readonly live: AsyncIterable<ModernJournalLiveItem>;
   close(): Promise<void>;
 }
 
@@ -86,6 +109,7 @@ export interface ModernJournalOpenRequest {
 }
 
 export interface ModernJournalOptions {
+  readonly profile?: DeepSeekModernProfile;
   readonly pageMaxMessages?: number;
   readonly maxRecordsPerPage?: number;
   readonly maxRecordBytes?: number;
@@ -122,6 +146,14 @@ export class ModernJournalError extends Error {
   }
 }
 
+/** A transient Assistant presentation gap that a fresh opening baseline can repair. */
+export class ModernJournalDesyncError extends ModernJournalError {
+  constructor(message: string) {
+    super("protocolError", message);
+    this.name = "ModernJournalDesyncError";
+  }
+}
+
 interface ResolvedOptions {
   readonly pageMaxMessages: number;
   readonly maxRecordsPerPage: number;
@@ -152,6 +184,7 @@ export async function openModernJournal(
     throw new TypeError("cwd must be a string when present");
   }
   const limits = resolveOptions(options);
+  const profile = options.profile ?? DEEPSEEK_V012_PROFILE;
   const address = { kind: "session" as const, sessionId: request.sessionId };
   const controller = new AbortController();
   const signal = options.signal
@@ -166,7 +199,13 @@ export async function openModernJournal(
     iterator = remote
       .openStream<unknown>(
         "session/follow",
-        { request: { address, maxMessages: limits.pageMaxMessages } },
+        {
+          request: {
+            address,
+            maxMessages: limits.pageMaxMessages,
+            ...(profile.assistantStream ? { assistantStream: true } : {}),
+          },
+        },
         signal,
       )
       [Symbol.asyncIterator]();
@@ -181,7 +220,7 @@ export async function openModernJournal(
   try {
     const first = await nextBeforeAbort(iterator, openingSignal);
     if (first.done) throw protocolError("journal follow ended before its opening snapshot");
-    opening = parseOpeningSnapshot(first.value, request, limits);
+    opening = parseOpeningSnapshot(first.value, request, limits, profile);
   } catch (error) {
     controller.abort(error);
     await Promise.allSettled([returnFollow()]);
@@ -196,9 +235,37 @@ export async function openModernJournal(
     retainedHistoryBytes += bytes;
   };
   const liveBuffer = new LiveBuffer(limits.maxBufferedLiveEvents, limits.maxBufferedLiveBytes);
+  if (opening.assistantStream?.activeAttempt) {
+    const attempt = opening.assistantStream.activeAttempt;
+    const openingFrames: DeepSeekV013AssistantFrame[] = [
+      {
+        type: "start",
+        attemptId: attempt.attemptId,
+        revision: opening.assistantStream.revision,
+        startedAfterSeq: attempt.startedAfterSeq,
+        turn: attempt.turn,
+        step: attempt.step,
+      },
+      ...expandV013AssistantStream(attempt.stream).map(
+        ({ time, chunk }, index): DeepSeekV013AssistantFrame => ({
+          type: "chunk",
+          attemptId: attempt.attemptId,
+          revision: opening.assistantStream?.revision as number,
+          index,
+          time,
+          chunk,
+        }),
+      ),
+    ];
+    for (const frame of openingFrames) {
+      const item = { type: "assistant-stream" as const, frame };
+      liveBuffer.push(item, assertWireBytes(item, limits.maxRecordBytes, "assistant baseline"));
+    }
+  }
   let closing = false;
   let pumpFailure: ModernJournalError | undefined;
   let expectedLiveSeq = opening.cursor + 1;
+  let assistantRevision = opening.assistantStream?.revision;
   const pump = (async (): Promise<void> => {
     try {
       while (!closing) {
@@ -207,13 +274,25 @@ export async function openModernJournal(
           if (closing) break;
           throw new ModernJournalError("unavailable", "journal follow ended unexpectedly");
         }
-        const { event, retainedBytes } = parseLiveEvent(item.value, limits);
-        if (event.seq !== expectedLiveSeq) {
-          throw protocolError("journal live events are not sequence-contiguous");
+        const parsed = parseLiveItem(item.value, limits, profile);
+        if ("frame" in parsed.item) {
+          const expectedRevision = (assistantRevision ?? 0) + 1;
+          const restartsLifecycle =
+            parsed.item.frame.type === "start" && parsed.item.frame.revision === 1;
+          if (!restartsLifecycle && parsed.item.frame.revision !== expectedRevision) {
+            throw new ModernJournalDesyncError(
+              "journal assistant stream is not revision-contiguous",
+            );
+          }
+          assistantRevision = parsed.item.frame.revision;
+        } else {
+          if (parsed.item.seq !== expectedLiveSeq) {
+            throw protocolError("journal live events are not sequence-contiguous");
+          }
+          expectedLiveSeq += 1;
+          reserveHistoryBytes(parsed.retainedBytes);
         }
-        expectedLiveSeq += 1;
-        reserveHistoryBytes(retainedBytes);
-        liveBuffer.push(event, retainedBytes);
+        liveBuffer.push(parsed.item, parsed.retainedBytes);
       }
       liveBuffer.end();
     } catch (error) {
@@ -270,7 +349,7 @@ export async function openModernJournal(
       );
       if (pumpFailure) throw pumpFailure;
       if (!result.ok) throw remoteResultError("session/page", result.error);
-      const page = parsePage(result.value, oldestSeq - 1, limits);
+      const page = parsePage(result.value, oldestSeq - 1, limits, profile);
       const firstSeq = page.events[0]?.seq;
       if (firstSeq === undefined || firstSeq >= oldestSeq) {
         throw protocolError("journal page made no backwards progress");
@@ -289,9 +368,12 @@ export async function openModernJournal(
     }
     assertContiguous(events, "journal history");
 
+    const inheritedEventCount = isDeepSeekV013(profile)
+      ? v013InheritedEventCount(opening.header.isSeeded === true, events)
+      : opening.header.seedLength;
     let liveClaimed = false;
-    const live: AsyncIterable<ModernJournalEvent> = {
-      [Symbol.asyncIterator](): AsyncIterator<ModernJournalEvent> {
+    const live: AsyncIterable<ModernJournalLiveItem> = {
+      [Symbol.asyncIterator](): AsyncIterator<ModernJournalLiveItem> {
         if (liveClaimed)
           throw new ModernJournalError("protocolError", "journal live stream is single-use");
         liveClaimed = true;
@@ -306,7 +388,9 @@ export async function openModernJournal(
       },
     };
     return {
+      profile,
       header: opening.header,
+      ...(inheritedEventCount === undefined ? {} : { inheritedEventCount }),
       cursor: opening.cursor,
       projections: opening.projections,
       events,
@@ -324,6 +408,7 @@ function parseOpeningSnapshot(
   value: unknown,
   request: ModernJournalOpenRequest,
   limits: ResolvedOptions,
+  profile: DeepSeekModernProfile,
 ): {
   readonly header: ModernJournalHeader;
   readonly cursor: number;
@@ -331,10 +416,14 @@ function parseOpeningSnapshot(
   readonly hasMore: boolean;
   readonly projections: ModernJournalProjections;
   readonly retainedBytes: number;
+  readonly assistantStream?: DeepSeekV013AssistantBaseline;
 } {
+  const expectedKeys = isDeepSeekV013(profile)
+    ? V013_JOURNAL_SNAPSHOT_KEYS
+    : ["type", "header", "cursor", "records", "hasMore", "projections"];
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["type", "header", "cursor", "records", "hasMore", "projections"]) ||
+    !hasExactKeys(value, expectedKeys) ||
     value.type !== "snapshot" ||
     !isCursor(value.cursor) ||
     typeof value.hasMore !== "boolean"
@@ -344,7 +433,7 @@ function parseOpeningSnapshot(
   if (value.cursor + 1 > limits.maxEvents) {
     throw limitError("journal opening cursor exceeded maxEvents");
   }
-  const header = parseHeader(value.header, request, limits.maxRecordBytes);
+  const header = parseHeader(value.header, request, limits.maxRecordBytes, profile);
   if (header.seedLength !== undefined && header.seedLength > value.cursor + 1) {
     throw protocolError("journal snapshot seedLength is past its opening cursor");
   }
@@ -355,7 +444,13 @@ function parseOpeningSnapshot(
     value.cursor,
     "journal snapshot",
     limits,
+    profile,
   );
+  let assistantStream: DeepSeekV013AssistantBaseline | undefined;
+  if (profile.assistantStream) {
+    assertWireBytes(value.assistantStream, limits.maxRecordBytes, "assistant stream baseline");
+    assistantStream = parseV013AssistantBaseline(value.assistantStream);
+  }
   return {
     header,
     cursor: value.cursor,
@@ -363,10 +458,16 @@ function parseOpeningSnapshot(
     hasMore: window.hasMore,
     projections,
     retainedBytes: window.retainedBytes,
+    ...(assistantStream === undefined ? {} : { assistantStream }),
   };
 }
 
-function parsePage(value: unknown, expectedLastSeq: number, limits: ResolvedOptions): ParsedWindow {
+function parsePage(
+  value: unknown,
+  expectedLastSeq: number,
+  limits: ResolvedOptions,
+  profile: DeepSeekModernProfile,
+): ParsedWindow {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["records", "hasMore"]) ||
@@ -374,7 +475,14 @@ function parsePage(value: unknown, expectedLastSeq: number, limits: ResolvedOpti
   ) {
     throw protocolError("session/page returned an invalid page");
   }
-  return parseWindow(value.records, value.hasMore, expectedLastSeq, "journal page", limits);
+  return parseWindow(
+    value.records,
+    value.hasMore,
+    expectedLastSeq,
+    "journal page",
+    limits,
+    profile,
+  );
 }
 
 function parseWindow(
@@ -383,6 +491,7 @@ function parseWindow(
   expectedLastSeq: number,
   label: string,
   limits: ResolvedOptions,
+  profile: DeepSeekModernProfile,
 ): ParsedWindow {
   if (!Array.isArray(records)) throw protocolError(`${label} records must be an array`);
   if (records.length > limits.maxRecordsPerPage) {
@@ -394,7 +503,7 @@ function parseWindow(
   for (const record of records) {
     assertWireBytes(record, limits.maxRecordBytes, `${label} record`);
     const remaining = Math.min(limits.maxEvents, logicalLimit) - events.length;
-    const expanded = parseHistoryRecord(record, remaining);
+    const expanded = parseHistoryRecord(record, remaining, profile);
     const expandedBytes = expanded.reduce(
       (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
       0,
@@ -420,8 +529,20 @@ function parseWindow(
   return { events, hasMore, retainedBytes };
 }
 
-function parseHistoryRecord(value: unknown, remainingEvents: number): ModernJournalEvent[] {
+function parseHistoryRecord(
+  value: unknown,
+  remainingEvents: number,
+  profile: DeepSeekModernProfile,
+): ModernJournalEvent[] {
   if (remainingEvents < 1) throw limitError("journal history exceeded its logical event bound");
+  if (isDeepSeekV013(profile)) {
+    try {
+      return parseV013HistoryRecord(value, remainingEvents, parseEvent);
+    } catch (error) {
+      if (error instanceof DeepSeekV013ProtocolError) throw protocolError(error.message);
+      throw error;
+    }
+  }
   if (!isRecord(value) || !hasExactKeys(value, ["type", "event"])) {
     throw protocolError("journal history record has an invalid envelope");
   }
@@ -430,15 +551,25 @@ function parseHistoryRecord(value: unknown, remainingEvents: number): ModernJour
   throw protocolError("journal history record has an unknown kind");
 }
 
-function parseLiveEvent(
+function parseLiveItem(
   value: unknown,
   limits: ResolvedOptions,
-): { readonly event: ModernJournalEvent; readonly retainedBytes: number } {
+  profile: DeepSeekModernProfile,
+): { readonly item: ModernJournalLiveItem; readonly retainedBytes: number } {
   const retainedBytes = assertWireBytes(value, limits.maxRecordBytes, "journal live record");
-  if (!isRecord(value) || !hasExactKeys(value, ["type", "event"]) || value.type !== "event") {
-    throw protocolError("journal live follow emitted a non-event frame");
+  if (isDeepSeekV013(profile)) {
+    try {
+      return { item: parseV013LiveItem(value, parseEvent), retainedBytes };
+    } catch (error) {
+      if (error instanceof DeepSeekV013ProtocolError) throw protocolError(error.message);
+      throw error;
+    }
   }
-  return { event: parseEvent(value.event), retainedBytes };
+  if (!isRecord(value)) throw protocolError("journal live follow emitted an invalid frame");
+  if (hasExactKeys(value, ["type", "event"]) && value.type === "event") {
+    return { item: parseEvent(value.event), retainedBytes };
+  }
+  throw protocolError("journal live follow emitted a non-event frame");
 }
 
 function parseEvent(value: unknown): ModernJournalEvent {
@@ -569,8 +700,17 @@ function parseHeader(
   value: unknown,
   expected: ModernJournalOpenRequest,
   maxBytes: number,
+  profile: DeepSeekModernProfile,
 ): ModernJournalHeader {
   assertWireBytes(value, maxBytes, "journal header");
+  if (isDeepSeekV013(profile)) {
+    try {
+      return parseV013JournalHeader(value, expected);
+    } catch (error) {
+      if (error instanceof DeepSeekV013ProtocolError) throw protocolError(error.message);
+      throw error;
+    }
+  }
   if (
     !isRecord(value) ||
     !hasRequiredOptionalKeys(
@@ -763,6 +903,9 @@ function remoteResultError(
 
 function normalizeError(error: unknown, context: string): ModernJournalError {
   if (error instanceof ModernJournalError) return error;
+  if (error instanceof DeepSeekV013ProtocolError) {
+    return new ModernJournalError("protocolError", `${context}: ${error.message}`);
+  }
   const remoteFailure =
     typeof error === "object" && error !== null ? Reflect.get(error, "remoteFailure") : undefined;
   if (
@@ -823,9 +966,11 @@ async function nextBeforeAbort<T>(
   });
 }
 
-class LiveBuffer implements AsyncIterable<ModernJournalEvent> {
-  readonly #items: Array<{ readonly event: ModernJournalEvent; readonly retainedBytes: number }> =
-    [];
+class LiveBuffer implements AsyncIterable<ModernJournalLiveItem> {
+  readonly #items: Array<{
+    readonly event: ModernJournalLiveItem;
+    readonly retainedBytes: number;
+  }> = [];
   #retainedBytes = 0;
   #done = false;
   #failure: Error | undefined;
@@ -837,7 +982,7 @@ class LiveBuffer implements AsyncIterable<ModernJournalEvent> {
     readonly maxBytes: number,
   ) {}
 
-  push(event: ModernJournalEvent, retainedBytes: number): void {
+  push(event: ModernJournalLiveItem, retainedBytes: number): void {
     if (this.#done || this.#failure) return;
     if (this.#items.length >= this.maxItems) {
       throw limitError("journal live buffer exceeded maxBufferedLiveEvents");
@@ -866,13 +1011,13 @@ class LiveBuffer implements AsyncIterable<ModernJournalEvent> {
     this.#notify();
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<ModernJournalEvent> {
+  [Symbol.asyncIterator](): AsyncIterator<ModernJournalLiveItem> {
     if (this.#claimed) throw protocolError("journal live buffer is single-use");
     this.#claimed = true;
     return { next: () => this.#next() };
   }
 
-  async #next(): Promise<IteratorResult<ModernJournalEvent>> {
+  async #next(): Promise<IteratorResult<ModernJournalLiveItem>> {
     while (this.#items.length === 0 && !this.#done && !this.#failure) {
       await new Promise<void>((resolve) => {
         this.#wake = resolve;

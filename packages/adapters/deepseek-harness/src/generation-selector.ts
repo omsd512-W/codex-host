@@ -8,12 +8,18 @@ import {
   resolveDeepSeekCommand,
   type DeepSeekCommandInvocation,
 } from "./executable.js";
+import {
+  deepSeekModernProfile,
+  type DeepSeekModernProfile,
+  type DeepSeekModernVersion,
+} from "./modern/profile.js";
 
-export type DeepSeekProtocolGeneration = "legacy" | "modern";
+export type DeepSeekProtocolGeneration = "modern";
 
 export interface DeepSeekExecutableGeneration {
   readonly generation: DeepSeekProtocolGeneration;
-  readonly version: "0.1.1-rc.2" | "0.1.2-rc.1";
+  readonly version: DeepSeekModernVersion;
+  readonly profile: DeepSeekModernProfile;
   readonly command: DeepSeekCommandInvocation;
 }
 
@@ -29,6 +35,7 @@ export type DeepSeekGenerationProbeErrorCode =
 export class DeepSeekGenerationProbeError extends Error {
   readonly retryable: boolean;
   readonly cleanupFailed: boolean;
+  readonly detectedVersion?: string;
   readonly stderrTail?: string;
 
   constructor(
@@ -37,6 +44,7 @@ export class DeepSeekGenerationProbeError extends Error {
     options?: ErrorOptions & {
       readonly retryable?: boolean;
       readonly cleanupFailed?: boolean;
+      readonly detectedVersion?: string;
       readonly stderrTail?: string;
     },
   ) {
@@ -44,6 +52,7 @@ export class DeepSeekGenerationProbeError extends Error {
     this.name = "DeepSeekGenerationProbeError";
     this.retryable = options?.retryable ?? (code === "unavailable" || code === "processExited");
     this.cleanupFailed = options?.cleanupFailed ?? false;
+    if (options?.detectedVersion !== undefined) this.detectedVersion = options.detectedVersion;
     if (options?.stderrTail !== undefined) this.stderrTail = options.stderrTail;
   }
 }
@@ -156,7 +165,7 @@ function loopbackHostname(hostname: string): boolean {
 }
 
 /** Validate and canonicalize the only endpoint form eligible for local DSH wire probes. */
-export function parseDeepSeekLegacyEndpoint(endpoint = DEFAULT_DEEPSEEK_ENDPOINT): string {
+export function parseDeepSeekEndpoint(endpoint = DEFAULT_DEEPSEEK_ENDPOINT): string {
   let parsed: URL;
   try {
     parsed = new URL(endpoint);
@@ -179,7 +188,7 @@ export function parseDeepSeekLegacyEndpoint(endpoint = DEFAULT_DEEPSEEK_ENDPOINT
   if (parsed.searchParams.has("token")) {
     throw probeError(
       "authenticationRequired",
-      "DeepSeek Harness Web bootstrap URL 不可作为连接端点；请关闭该实例，让 codexhost 启动推荐版本 dsh-v0.1.2-rc.1。\nA DeepSeek Harness Web bootstrap URL cannot be used as an endpoint. Close that instance and let codexhost start the recommended dsh-v0.1.2-rc.1.",
+      "DeepSeek Harness Web bootstrap URL 不可作为连接端点；请关闭该实例，让 codexhost 启动推荐版本 dsh-v0.1.3-rc.1。\nA DeepSeek Harness Web bootstrap URL cannot be used as an endpoint. Close that instance and let codexhost start the recommended dsh-v0.1.3-rc.1.",
     );
   }
   if (parsed.search !== "") {
@@ -194,6 +203,7 @@ function probeError(
   options?: ErrorOptions & {
     readonly retryable?: boolean;
     readonly cleanupFailed?: boolean;
+    readonly detectedVersion?: string;
     readonly stderrTail?: string;
   },
 ): DeepSeekGenerationProbeError {
@@ -231,7 +241,7 @@ function singleOutputLine(output: string): string | null {
 
 export function classifyDeepSeekVersionOutput(
   output: string,
-): Pick<DeepSeekExecutableGeneration, "generation" | "version"> {
+): Pick<DeepSeekExecutableGeneration, "generation" | "version" | "profile"> {
   const version = singleOutputLine(output);
   if (version === null || !SEMVER_PATTERN.test(version)) {
     throw probeError(
@@ -239,11 +249,19 @@ export function classifyDeepSeekVersionOutput(
       "DeepSeek Harness --version did not return exactly one semantic version",
     );
   }
-  if (version === "0.1.1-rc.2") return { generation: "legacy", version };
-  if (version === "0.1.2-rc.1") return { generation: "modern", version };
+  if (version === "0.1.2-rc.1" || version === "0.1.3-rc.1") {
+    return { generation: "modern", version, profile: deepSeekModernProfile(version) };
+  }
   throw probeError(
     "unsupported",
-    `当前 DeepSeek Harness 版本 ${version} 不受支持；请升级到推荐版本 dsh-v0.1.2-rc.1（Legacy 会话仍支持 dsh-v0.1.1-rc.2）。\nDeepSeek Harness ${version} is unsupported. Please upgrade to the recommended dsh-v0.1.2-rc.1 (dsh-v0.1.1-rc.2 remains supported for Legacy sessions).`,
+    `当前检测版本：dsh-v${version}。CH 支持版本：dsh-v0.1.3-rc.1、dsh-v0.1.2-rc.1。推荐版本：dsh-v0.1.3-rc.1。${
+      version === "0.1.1-rc.2" ? "Legacy 已停止支持，请升级后重试。" : "请切换到受支持版本后重试。"
+    }\nDetected version: dsh-v${version}. CH supports dsh-v0.1.3-rc.1 and dsh-v0.1.2-rc.1. Recommended version: dsh-v0.1.3-rc.1. ${
+      version === "0.1.1-rc.2"
+        ? "Legacy is no longer supported; upgrade before retrying."
+        : "Switch to a supported version before retrying."
+    }`,
+    { detectedVersion: version },
   );
 }
 
