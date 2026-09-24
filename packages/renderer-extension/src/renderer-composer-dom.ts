@@ -721,6 +721,21 @@ export function mountComposerAgentControl(
   return control;
 }
 
+function nativeSendDisabled(button: HTMLButtonElement, fallback: boolean): boolean {
+  const key = Object.getOwnPropertyNames(button).find((name) => name.startsWith("__reactProps$"));
+  const props: unknown = key ? Object.getOwnPropertyDescriptor(button, key)?.value : undefined;
+  return typeof props === "object" &&
+    props !== null &&
+    "disabled" in props &&
+    typeof props.disabled === "boolean"
+    ? props.disabled
+    : fallback;
+}
+
+/**
+ * Returns whether this Composer is ready to submit to an external Harness:
+ * not Codex, Adapter ready, and no codexhost submission blocker.
+ */
 export function renderComposerAgentControl(
   control: ComposerAgentControl,
   state: { agent: RendererAgent; phase: ComposerAgentPhase },
@@ -734,7 +749,7 @@ export function renderComposerAgentControl(
   locale: RendererSettingsLocale = "en",
   currentCodexAccount: CodexAccountSummary | null = null,
   ownershipError = false,
-): void {
+): boolean {
   if (control.usage === null) {
     control.usage = mountRendererUsageControl(control.composerId, locale);
   }
@@ -763,7 +778,12 @@ export function renderComposerAgentControl(
     control.sendDisabledBeforeSwitch = control.sendButton.disabled;
     control.sendButton.disabled = true;
   } else if (!submissionBlocked && control.sendDisabledBeforeSwitch !== null) {
-    control.sendButton.disabled = control.sendDisabledBeforeSwitch;
+    // Native blockers, including the Codex usage gate, may have changed while
+    // switching; restore from the latest native props rather than a stale flag.
+    control.sendButton.disabled = nativeSendDisabled(
+      control.sendButton,
+      control.sendDisabledBeforeSwitch,
+    );
     control.sendDisabledBeforeSwitch = null;
   }
   const pickerView = renderRendererAgentPicker(
@@ -807,11 +827,15 @@ export function renderComposerAgentControl(
   control.harnessCommands.root.hidden = state.agent === "codex";
   control.harnessCommands.root.style.display = state.agent === "codex" ? "none" : "inline-flex";
   renderRendererCreditsControl(control.credits, accountCredits, locale);
+  return state.agent !== "codex" && adapterState === "ready" && !submissionBlocked;
 }
 
 export function disposeComposerAgentControl(control: ComposerAgentControl): void {
   if (control.sendDisabledBeforeSwitch !== null) {
-    control.sendButton.disabled = control.sendDisabledBeforeSwitch;
+    control.sendButton.disabled = nativeSendDisabled(
+      control.sendButton,
+      control.sendDisabledBeforeSwitch,
+    );
   }
   restoreNativeControl(control.nativeModelControl);
   restoreNativeControl(control.nativeContextUsageControl);

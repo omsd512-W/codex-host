@@ -157,6 +157,7 @@ describe("production Desktop Controller", () => {
         "hermes",
         "qoder",
         "qoder-cn",
+        "kimi-code",
       ],
       timeoutMs: 90_000,
     });

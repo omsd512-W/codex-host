@@ -14,7 +14,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../src/settings/icons.js", () => ({
-  createRendererSettingsIcon: () => "icon",
+  createRendererSettingsIcon: () => ({ classList: { add() {} } }),
   isRendererSettingsIconName: () => true,
 }));
 
@@ -1607,9 +1607,18 @@ describe("Renderer Updates page", () => {
     // Status and the update action come first; the manual fallback stays visible
     // right below it, and release notes render last.
     expect(content.children.indexOf(panel)).toBeLessThan(content.children.indexOf(controls));
-    expect(content.children.indexOf(controls)).toBeLessThan(
+    const starBanner = elementWithClass(content, "settings-update-star");
+    expect(content.children.indexOf(controls)).toBeLessThan(content.children.indexOf(starBanner));
+    expect(content.children.indexOf(starBanner)).toBeLessThan(
       content.children.indexOf(elementWithClass(content, "settings-update-notes-section")),
     );
+    expect(visibleText(starBanner)).toContain("如果 CodexHost 帮到了你，请在 GitHub 点个 Star");
+    const starLink = descendants(starBanner).find(({ tagName }) => tagName === "a");
+    expect(starLink).toMatchObject({
+      href: "https://github.com/BytePioneer-AI/codex-host",
+      target: "_blank",
+      rel: "noopener noreferrer",
+    });
     expect(descendants(panel)).toContain(updateButton);
     expect(descendants(panel)).not.toContain(notes);
     expect(notes.children.map((child) => (child as FakeElement).tagName)).toEqual(["h2", "ul"]);
