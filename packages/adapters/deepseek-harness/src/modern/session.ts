@@ -58,6 +58,12 @@ import { isRecord, parseArguments, projectToolResult, structuredDiffs } from "..
 import type { ModernModelCatalogSnapshot } from "./catalog.js";
 import { executeModernCommand, ModernCommandError } from "./commands.js";
 import {
+  codeDispatchItem,
+  codeDispatchKey,
+  codeDispatchOutcome,
+  codeDispatchOutput,
+} from "./code-dispatch.js";
+import {
   modernConfigurationHarnessError,
   modernSelectionForModel,
   ModernConfigurationError,
@@ -2043,6 +2049,14 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
       case "tool/result":
         if (event.surfaceOp === "append") this.#completeTool(active, data, event.seq);
         return;
+      case "tool/code-dispatch-start":
+      case "tool/ptc-dispatch-start":
+        this.#startCodeDispatch(active, data, event.seq, event.time);
+        return;
+      case "tool/code-dispatch":
+      case "tool/ptc-dispatch":
+        this.#settleCodeDispatch(active, data, event.seq, event.time);
+        return;
       case "step/end":
         this.#cancelReasoningItem(active);
         return;
@@ -2257,6 +2271,43 @@ export class ModernHarnessSession implements HarnessSession, ModernEventSink {
         this.#completeItem(active, fileItem, { status: "succeeded" });
       }
     }
+  }
+
+  #startCodeDispatch(
+    active: ActiveHostTurn,
+    data: Record<string, unknown>,
+    seq: number,
+    time: number,
+  ): LiveTool {
+    const key = codeDispatchKey(data);
+    if (active.tools.has(key)) {
+      throw new ModernHistoryError("protocolError", "Modern code dispatch is duplicated");
+    }
+    const item = codeDispatchItem(modernItemId(this.#sessionId, `event:${seq}:tool`), data);
+    // Native event times give the sub-call's real duration, including on replay.
+    const tool = { item, toolName: item.toolName, startedAtMs: time };
+    active.tools.set(key, tool);
+    this.#emit({ type: "item.started", turnId: active.turnId, item });
+    return tool;
+  }
+
+  #settleCodeDispatch(
+    active: ActiveHostTurn,
+    data: Record<string, unknown>,
+    seq: number,
+    time: number,
+  ): void {
+    // Dispatch events are log-only; a settle without its start still shows the call.
+    const tool =
+      active.tools.get(codeDispatchKey(data)) ?? this.#startCodeDispatch(active, data, seq, time);
+    active.tools.delete(codeDispatchKey(data));
+    const output = codeDispatchOutput(data, this.#toolOutputLimit);
+    const item: HostToolExecutionItem = {
+      ...tool.item,
+      ...(output ? { output } : {}),
+      durationMs: Math.max(0, time - tool.startedAtMs),
+    };
+    this.#completeItem(active, item, codeDispatchOutcome(data, tool.toolName));
   }
 
   #finishTurn(
